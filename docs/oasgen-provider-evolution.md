@@ -36,7 +36,21 @@ Scope analysed: 11 specs, ~108 operations, **34 manageable resources** across th
 
 ## 0. Summary table
 
-> **0.66.0 is SKIPPED (2026-11-14), measured.** It is the release that finally makes
+> **Pin status (2026-11-14, later): 0.67.0.** Moved from 0.65.0, skipping 0.66.0. This is the
+> release where `LoadBalancer` and `AiKey` finally report honestly **without** the cost 0.66.0
+> charged: both settle at `Ready=False` / `Synced=False` carrying `NoCreateVerbDeclared`, carry
+> both `external-create-pending` and `external-create-not-requested` at the same timestamp, and
+> transition **three minutes apart** — the resync — where 0.66.0 churned an annotation ~5 times a
+> second. Same instrument, same window: **18 watch deliveries against 0.66.0's 2839**. Shape 36
+> rendered / 0 failures / 0 stamped with the control at 1, blast radius 2 of 36 unchanged;
+> prediction A 0 of 36 with detector controls at 36/36 and the corpus control at 36; auth shape
+> 36 / 0; the adoption chain adopted, converged, corrected injected drift and verified its delete
+> with a 404, residue 0; transport census 19 / 18 / 0 / 1, **identical across 0.61.0, 0.64.0,
+> 0.65.0 and 0.67.0**. One clause was predicted and not measured: `ExternalCreateIncomplete`
+> reading false is inferred from the loop's absence, because a Go predicate is not readable from
+> a CR. See the 0.67.0 appendix.
+>
+> > **0.66.0 is SKIPPED (2026-11-14), measured.** It is the release that finally makes
 > `LoadBalancer` and `AiKey` report honestly — `Ready=False` AND `Synced=False`, both carrying
 > `NoCreateVerbDeclared`, with no phantom `CreatedExternalResource` and no false
 > `external-create-succeeded`. It also introduces a **write loop** on exactly those two kinds:
@@ -1999,3 +2013,66 @@ snapshot consistent with the independently measured write rate.
 pending update and `#669`'s map-list latching. Those are real and we do not have them. But the
 write loop lands on two kinds we ship samples for and document, and the fix is one release away,
 so waiting costs less than taking a loop whose symptom is invisible in the CR.
+
+## Appendix — the 0.65.0 → 0.67.0 pin move, skipping 0.66.0 (2026-11-14)
+
+0.66.0 and 0.67.0 are one story: the first makes our two no-`create`-verb kinds report honestly
+and charges a write loop for it, the second removes the loop and keeps the honest report. Both
+halves measured on released images; the 0.66.0 appendix above has the defect.
+
+### The two kinds, before and after
+
+```
+                        0.65.0                    0.66.0                 0.67.0
+Ready                   False/Creating            False/NoCreateVerb…    False/NoCreateVerb…
+Synced                  False/ReconcileError      False/NoCreateVerb…    False/NoCreateVerb…
+watch deliveries/11min  --                        2839 and 3918          18 and 18
+annotation churn        --                        1415 on / 1424 off     none; both stable
+create annotations      pending (re-stamped)      pending (churning)     pending + not-requested,
+                                                                         same timestamp
+CreatedExternalResource once per poll (<0.64.0)   absent                 absent
+vendor collections      0 -> 0                    0 -> 0                 0 -> 0
+```
+
+`18` against `2839` is the same instrument over the same window, so the loop is **gone** rather
+than quieter. Transitions land three minutes apart — the resync — instead of twice a second.
+
+**What the fix's shape bought, which is more than quiet.** v1.17.1 closes `pending` with a second
+timestamp (`external-create-not-requested`) instead of deleting it, so the `OnDelete` watch that
+drove the loop never fires — there is nothing left to rate-limit. And the CR now carries a
+**positive record that a create was deliberately not requested**, where before 0.64.0 that state
+was indistinguishable from a create that had succeeded. An absence replaced by readable evidence.
+
+### Measured versus inferred
+
+Stated because the distinction is the whole value of the run:
+
+* **Measured:** the condition pair, both annotations and their timestamps, the delivery counts,
+  the three-minute cadence, the absent event, the unchanged vendor collections.
+* **Inferred:** that `meta.ExternalCreateIncomplete` now reads false. A Go predicate is not
+  readable from a CR; what the run observes is its *consequence* — passes once per resync rather
+  than continuously, which a true predicate would have prevented by re-entering recovery.
+
+### What it closes beyond this repo
+
+oasgen#660 — a child stuck at `Ready=False/Creating` taking `childhealth`'s `childConverging`
+default, so a composition containing it converges forever with no failure signal — is closed for
+these two kinds by **two separately measured halves**: 0.67.0 emits `NoCreateVerbDeclared` (here),
+and core-provider 2.13.96 (#496) maps that reason to `childFailed`, so the parent reads
+`Ready=False/Unavailable` naming the child. The composition itself has **not** been observed at
+0.67.0; the parent's verdict follows from the two halves rather than from a run.
+
+### The other axes at 0.67.0
+
+```
+shape       36 rendered / 0 failures / 0 stamped `default: {}`, CONTROL 1
+            blast radius 2 of 36 (SecurityGroup, Vpc), unchanged since 0.65.0
+prediction A  resolvedResolversDigest on 0 of 36, detector controls observedGeneration 36/36
+              and conditions 36/36, corpus control 36 managed CRDs
+auth shape  36 Configuration CRDs asserted / 0 failures
+chain       ADOPTED, CONVERGED, drift injected and corrected, delete verified 404, residue 0
+transport   19 attempts / 18 ok / 0 transport failures / 1 HTTP error
+            identical across 0.61.0, 0.64.0, 0.65.0 and 0.67.0
+artifacts   chart, crds chart and both images verified here before the run, with a negative
+            control (a chart that must not exist at 0.67.0 does not)
+```

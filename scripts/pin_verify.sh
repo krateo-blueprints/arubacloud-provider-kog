@@ -19,7 +19,7 @@
 #   KEEP=0 scripts/pin_verify.sh     # delete the cluster afterwards
 set -uo pipefail
 
-PIN="${OASGEN_VERSION:-0.65.0}"              # 0.65.0 is the PIN; 0.36.0 is the FLOOR.
+PIN="${OASGEN_VERSION:-0.67.0}"              # 0.67.0 is the PIN; 0.36.0 is the FLOOR.
                                              # It SKIPS 0.66.0, 0.53.0 and 0.54.0, all measured.
                                              # 0.66.0: #664 fixes our two no-create kinds and
                                              # introduces a WRITE LOOP on them -- the create

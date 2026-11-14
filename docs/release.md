@@ -130,7 +130,7 @@ patched OAS, every `requestFieldMapping.inPath` against the path parameters, eve
 ## Compatibility
 
 These manifests require **oasgen-provider >= 0.36.0**. That is the FLOOR, not the pin:
-the pin is **0.65.0** and is what CI validates (see [Usage](usage.md#prerequisites)). The
+the pin is **0.67.0** and is what CI validates (see [Usage](usage.md#prerequisites)). The
 two were the same number when this section was written and have not been since; keeping
 them distinct matters because the floor explains what cannot be lowered, while the pin is
 what the evidence was gathered on. It is no longer a fork:
@@ -150,10 +150,12 @@ inferred, re-measured 2026-11-13 across the whole range the pin has travelled:
 | 0.61.0 (a former pin) | `>=1.36.0-0` |
 | 0.63.1 (a former pin) | `>=1.36.0-0` |
 | 0.64.0 (a former pin) | `>=1.36.0-0` |
-| **0.65.0 (the pin)** | `>=1.36.0-0` |
+| 0.65.0 (a former pin) | `>=1.36.0-0` |
+| 0.66.0 (**skipped**, see below) | `>=1.36.0-0` |
+| **0.67.0 (the pin)** | `>=1.36.0-0` |
 
-So the floor has not moved since 0.34.0, and the pin reaching 0.65.0 costs nothing further
-in cluster version. The chart's `appVersion` at 0.65.0 is also `0.65.0` (re-measured 2026-11-14 from
+So the floor has not moved since 0.34.0, and the pin reaching 0.67.0 costs nothing further
+in cluster version. The chart's `appVersion` at 0.67.0 is also `0.67.0` (re-measured 2026-11-14 from
 the published chart, as is every row above), which is what ties the rest-dynamic-controller image tag
 to the chart rather than letting the two drift.
 
