@@ -61,10 +61,18 @@ def _ts(value, what):
     direction that hides a latch. Measured, in the two runtimes that write these four
     annotations:
 
-      unstructured-runtime (what THIS repo's controllers run on) -- v1.17.1, v1.27.1 and
-        v1.28.1 all do `t.Format(time.RFC3339)` from `time.Now()`, at pkg/meta/meta.go:232+
-        called from pkg/controller/worker.go. Second precision, no fraction, and NO .UTC():
-        the offset is whatever zone the process is in. UTC only by the distroless default.
+      unstructured-runtime (what THIS repo's controllers run on) -- second precision, no
+        fraction, and the offset changed hands at a KNOWN version:
+          v1.17.1, v1.27.1, v1.28.0, v1.28.1   `t.Format(time.RFC3339)` from `time.Now()`
+            (pkg/meta/meta.go:232+, called from pkg/controller/worker.go). NO .UTC(), so the
+            offset is whatever zone the process is in -- UTC only by the distroless default.
+          v1.28.2 and later                     all four setters route through
+            `markerTime(t) { return t.UTC().Format(time.RFC3339) }` (meta.go:238), so the
+            offset is always Z.
+        Both readings are from the tags' own source, not from a release note.
+        THE PARSE STAYS NECESSARY either way: a cluster on v1.28.1 or earlier still writes a
+        local offset, nothing upstream rewrites markers already on an object, and
+        provider-runtime's copy keeps nanosecond precision (its UTC fix is #110, unreleased).
       provider-runtime -- `time.RFC3339Nano` from `time.Now()`, per that repo's own
         session. RFC3339Nano TRIMS TRAILING ZEROS, so `10:00:00Z` sorts AFTER
         `10:00:00.1Z` because 'Z' (0x5A) > '.' (0x2E) -- the later instant sorts first.
