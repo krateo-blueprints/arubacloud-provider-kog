@@ -56,7 +56,12 @@ export KUBECONFIG="$PIN_KUBECONFIG"
 NS="${NS:-krateo-system}"
 CHART_DIR="${CHART_DIR:-tests/compositions/no-create-rollup}"
 CHART_NAME=aruba-no-create-rollup-probe
-CORE_PROVIDER_VERSION="${CORE_PROVIDER_VERSION:-}"   # empty = install whatever is current
+CORE_PROVIDER_VERSION="${CORE_PROVIDER_VERSION:-2.13.114}"   # the release that raised the
+                                                      # chart-version cap 20 -> 64 and ships
+                                                      # the crds NOTES.txt (#588, #589).
+                                                      # PINNED, not floating: resolving
+                                                      # `latest` made the version drift
+                                                      # between runs of the same probe.
 CDC_FLOOR="${CDC_FLOOR:-2.13.96}"                    # #496 landed here; below it the arm is absent
 KEEP="${KEEP:-0}"
 PROJECT="${PROJECT:-}"
@@ -299,25 +304,50 @@ CONTENT_SHA="$(find "$CHART_DIR" -type f ! -name '*.tgz' -print0 \
   | xargs -0 shasum -a 256 \
   | shasum -a 256 | cut -c1-8)"
 [ -n "$CONTENT_SHA" ] || die "could not digest the chart directory"
-# `0.0.0-p<8 hex>` = 15 bytes, and the shape is forced from both ends.
+# `0.0.0-p<8 hex>` = 15 bytes, and the budget is the DERIVED NAMES, not the field.
 #
-# CEILING: CompositionDefinition's CRD caps spec.chart.version at 20 BYTES. The first
-# version of this used `0.0.0-probe-<12 hex>` (24 bytes) and the apiserver refused it --
-# "Too long: may not be more than 20 bytes" -- after the chart had already been packaged
-# and served. 20 bytes is tight for a semver carrying any prerelease tag at all.
+# HISTORY, because the constraint changed under this script. core-provider capped
+# `spec.chart.version` at 20 bytes, and this check enforced that. The cap measured the WRONG
+# FIELD: the derived names come from the FETCHED chart's Chart.yaml version, not from
+# spec.chart.version. core-provider 2.13.114 raises the field to maxLength 64 and checks the
+# names that actually break -- verified here against 2.13.113 as a control: maxLength 20 at
+# 2.13.113, 64 at 2.13.114.
 #
-# FLOOR: the `p` prefix is load-bearing. A bare hex digest can be all digits, and a
-# numeric semver prerelease identifier may not have a leading zero, so `0.0.0-0123abc`
-# would be fine while `0.0.0-01234567` would not -- an invalid chart version roughly one
-# time in sixteen, which is the kind of flake nobody diagnoses.
+# THE REAL LIMITS, which are plural-dependent:
+#   <plural>-v<ver>-controller      <= 63  =>  plural + version <= 50
+#   ...-controller-service          <= 63  =>  plural + version <= 42   (metrics only)
+#
+# The plural comes from the CHART NAME, so a descriptive name spends the budget first:
+# `aruba-no-create-rollup-probe` -> kind `ArubaNoCreateRollupProbe` -> plural
+# `arubanocreaterollupprobes` (25), leaving 17 for the version when metrics are on.
+#
+# CHECKED AGAINST THE TIGHTER BUDGET, deliberately. `cdc.metrics.enabled` is false in the
+# chart's defaults, so 50 applies on a default cluster -- but a chart that only fits when a
+# flag happens to be off is a chart that breaks on someone else's cluster. The default is
+# not the constraint.
+#
+# AND NO CHARACTER-CLASS CHECK. An earlier note here said the CRD version must be DNS-1035
+# so uppercase or `+` would be refused; core-provider withdrew that. crdgen's
+# `NormalizeVersionName` lowercases and maps every other character to `-`, so `1.0.0-RC1`
+# becomes `v1-0-0-rc1` and is NOT refused. Adding a character check would refuse versions
+# the API accepts, which is the same error in the opposite direction.
 PROBE_VERSION="0.0.0-p${CONTENT_SHA}"
-if [ "${#PROBE_VERSION}" -gt 20 ]; then
-  die "the computed chart version ${PROBE_VERSION} is ${#PROBE_VERSION} bytes and
-CompositionDefinition caps spec.chart.version at 20. Shorten the digest rather than the
-prefix: the prefix keeps the prerelease identifier non-numeric."
-fi
+# The plural crdgen will derive: the chart name with separators removed, lowercased, plus s.
+PROBE_PLURAL="$(printf '%s' "$CHART_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]')s"
+budget_tight=42 budget_loose=50
+total=$(( ${#PROBE_PLURAL} + ${#PROBE_VERSION} ))
 note "chart content digest ${CONTENT_SHA}"
-note "version ${PROBE_VERSION} (${#PROBE_VERSION} bytes, cap is 20)"
+note "version ${PROBE_VERSION} (${#PROBE_VERSION}) + plural ${PROBE_PLURAL} (${#PROBE_PLURAL}) = ${total}"
+if [ "$total" -gt "$budget_tight" ]; then
+  die "the derived name budget is exceeded: plural ${#PROBE_PLURAL} + version ${#PROBE_VERSION}
+    = ${total}, against ${budget_tight} (the limit when cdc.metrics.enabled) and
+    ${budget_loose} (without it). core-provider refuses this as
+    Ready=False/DerivedNameTooLong, naming the derived name and its length.
+    Shorten the DIGEST, not the prefix: the non-numeric prefix keeps the semver prerelease
+    identifier from being all digits with a leading zero. Shortening the CHART NAME also
+    works and buys more, since the plural is derived from it."
+fi
+note "within the tighter ${budget_tight}-byte budget, so it holds with or without metrics"
 helm package "$CHART_DIR" --version "$PROBE_VERSION" --app-version "$PROBE_VERSION" \
   --destination "$WORK" >/dev/null || die "helm package failed"
 TGZ="${CHART_NAME}-${PROBE_VERSION}.tgz"
