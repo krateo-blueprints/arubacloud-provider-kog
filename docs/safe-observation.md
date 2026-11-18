@@ -84,9 +84,11 @@ expensive, and it needs no change to the RestDefinition.
 > **What is still NOT established for this repository, stated so nobody reads the above as
 > coverage:** whether a given oasgen-provider release's `rest-dynamic-controller` image
 > carries a runtime at v1.28.0 or later. The runtime version cannot be read from the RDC
-> source repositories — `krateo-platformops/rest-dynamic-controller` is archived (last push
-> 2026-08-07) and `krateoplatformops/rest-dynamic-controller` was last pushed 2026-06-17,
-> while the image running here was published today. So for the pin, **the gate's presence is
+> source repositories. `krateo-platformops/rest-dynamic-controller` is archived (last push
+> 2026-08-07), and the repository of the same name under the **unhyphenated** org — the dead
+> one `lint-docs` bans by name, one hyphen away from the live org — was last pushed
+> 2026-06-17. The image running here was published today, so neither repository is its
+> source and neither can be read for its runtime pin. So for the pin, **the gate's presence is
 > a question to answer on a cluster**, by annotating a CR and observing whether the action is
 > withheld, not by reading a dependency graph.
 >
