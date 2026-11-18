@@ -2057,10 +2057,74 @@ Stated because the distinction is the whole value of the run:
 
 oasgen#660 — a child stuck at `Ready=False/Creating` taking `childhealth`'s `childConverging`
 default, so a composition containing it converges forever with no failure signal — is closed for
-these two kinds by **two separately measured halves**: 0.67.0 emits `NoCreateVerbDeclared` (here),
-and core-provider 2.13.96 (#496) maps that reason to `childFailed`, so the parent reads
-`Ready=False/Unavailable` naming the child. The composition itself has **not** been observed at
-0.67.0; the parent's verdict follows from the two halves rather than from a run.
+these two kinds, and **the parent's own condition has now been observed** rather than inferred.
+
+> **Runtime verification (2026-11-18).** The paragraph that stood here said the composition
+> itself had *not* been observed at 0.67.0 and that the parent's verdict followed from two
+> separately measured halves — 0.67.0 emitting `NoCreateVerbDeclared`, and core-provider
+> 2.13.96 (#496) mapping that reason to `childFailed`. **That reasoning was right and is now
+> superseded by a run.** The halves are left stated above because the inference was sound and
+> a reader comparing the two should see what was inferred and what was then measured.
+
+Measured on a disposable GKE cluster with a probe-only composition
+(`tests/compositions/no-create-rollup`, never shipped) rendering one `LoadBalancer` — no
+create verb — alongside one `Vpc` that reconciles, so the parent's message has to *name* a
+child rather than merely be false:
+
+```
+=== PARENT (ArubaNoCreateRollupProbe/no-create-rollup-probe) ===
+type=ChartRenderable status=True  reason=Renderable
+type=RBACComplete    status=True  reason=Applied
+type=Ready           status=False reason=Unavailable
+  message=managed children not healthy: loadbalancers/krateo-system/probe-lb
+type=Synced          status=True  reason=ReconcileSuccess
+
+=== CHILD loadbalancer/probe-lb ===
+type=Ready  status=False reason=NoCreateVerbDeclared
+type=Synced status=False reason=NoCreateVerbDeclared
+
+=== CHILD vpc/probe-vpc ===
+type=Ready    status=True reason=Available
+type=Synced   status=True reason=ReconcileSuccess
+type=Observed status=True reason=ResponseObtained
+```
+
+```
+core-provider image      core-provider:2.13.112   (read from the IMAGE tag, not the chart)
+core-provider-crds       2.13.112
+oasgen pin               oasgen-provider:0.67.0
+rest-dynamic-controller  0.67.0 on BOTH controllers
+parent Ready transition  2026-11-18T10:22:49Z
+```
+
+The version is established twice over rather than by timing: `git ls-remote` at 10:22:20Z
+showed no 2.13.113 tag, and core-provider tagged it at 10:27:23Z — after the transition above.
+
+**The `Vpc` is absent from the parent's message**, which is the half a single broken child could
+not have shown: the rollup names the failing child, not everything it manages.
+
+And the status is self-describing in a way that made it readable without asking core-provider
+anything:
+
+```
+managedChildrenCount:    4        the two resources plus their two Configurations
+healthEvaluatedChildren: 2
+unevaluatedChildren:
+  noReadyCondition:      2        the Configurations, which carry no Ready condition
+  assertedReady: 0   noEvidenceBelow: 0   notObserved: 0
+unreadableChildrenCount: 0
+```
+
+`4 = 2 evaluated + 2 noReadyCondition`, and the arithmetic closes. A rollup reporting
+"2 of 4 healthy" would have been technically true and useless.
+
+**What this does NOT establish**, in core-provider's own framing, which belongs beside the
+result: no composition this repo ships renders `LoadBalancer` or `AiKey` — verified, the one
+chart under `compositions/` renders `Vpc`, `Subnet` and `SecurityGroup` — so the user-visible
+impact of this path today is **nil**. What the run establishes is the contract across the
+rest-dynamic-controller → cdc boundary, not fleet coverage. The probe composition lives under
+`tests/` and is never published, because shipping a child that can never be created would be a
+worse artifact than the missing evidence.
 
 ### The other axes at 0.67.0
 
