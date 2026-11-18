@@ -115,7 +115,16 @@ def token(force=False):
     if r.returncode == 0 and r.stdout.strip():
         _TOKEN = base64.b64decode(r.stdout).decode()
         return _TOKEN
-    raise SystemExit(f"no token in {TOKEN_SECRET_NS}/{TOKEN_SECRET}")
+    # The kubectl stderr goes in the message. Without it this said "no token in
+    # default/arubacloud-token" when the real cause was `--context kind-aruba-ga does not
+    # exist` -- a message about the credential for a failure about the cluster, which cost
+    # a measurement on the upgrade axis. KUBE_CONTEXT defaults to a kind context, so any
+    # caller against a different cluster that forgets to set it lands here.
+    raise SystemExit(
+        f"no token in {TOKEN_SECRET_NS}/{TOKEN_SECRET} via context '{CONTEXT}'"
+        + (f": {r.stderr.strip()[:200]}" if r.stderr.strip() else
+           " (the Secret read returned nothing; KUBE_CONTEXT is "
+           f"'{CONTEXT}' -- is that the cluster you meant?)"))
 
 
 # Attempt census, so a transport-failure count has a denominator.

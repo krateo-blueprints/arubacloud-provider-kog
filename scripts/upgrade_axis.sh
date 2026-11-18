@@ -54,6 +54,13 @@ die() { printf '\nupgrade_axis: %s\n' "$*" >&2; exit 1; }
 say "PREFLIGHT -- refusing before anything moves, not after"
 
 ctx="$(kubectl config current-context)" || die "no current context"
+# EXPORTED, because scripts/ga_chain.py reads KUBE_CONTEXT and DEFAULTS IT TO A KIND
+# CONTEXT. Left unset, every kubectl call in the chain goes to `kind-aruba-ga`, which on a
+# GKE cluster does not exist -- and the chain then reports "no token in
+# default/arubacloud-token", a message about the credential for a failure about the
+# cluster. That cost the behavioural half of a measurement whose upgrade had already been
+# spent, so it is set here rather than left to the caller.
+export KUBE_CONTEXT="$ctx"
 printf '    context          %s\n' "$ctx"
 printf '    from -> to       %s -> %s\n' "$FROM" "$TO"
 printf '    chain            %s\n' "$CHAIN"
@@ -78,6 +85,25 @@ crs="$(kubectl get vpcs,subnets,securitygroups,securityrules -A --no-headers 2>/
 earlier run left behind (run the chain with --keep first); with none, an upgrade here
 would measure nothing and report it as a pass."
 printf '    CRs to carry     %s\n' "$crs"
+
+# THE CHAIN MUST BE ABLE TO READ ITS TOKEN, proven here rather than discovered after the
+# upgrade. Same class as the PROJECT check: everything the second half needs is verified
+# while the first half can still be called off. Read through the SAME context and the same
+# Secret coordinates the chain uses, because checking it any other way checks something
+# else. The value is never printed -- only whether it is there.
+tok_ns="${ARUBA_TOKEN_SECRET_NS:-default}"
+tok_name="${ARUBA_TOKEN_SECRET:-arubacloud-token}"
+# `|| true` INSIDE the substitution on purpose. With `set -o pipefail` a failing kubectl
+# makes the whole pipeline non-zero, `set -e` then kills the script AT THE ASSIGNMENT, and
+# the operator gets exit 1 with no message at all -- which is how this guard behaved when
+# first written: it stopped the run for the right reason while explaining nothing.
+tok_len="$( { kubectl --context "$ctx" get secret "$tok_name" -n "$tok_ns" \
+               -o jsonpath='{.data.token}' 2>/dev/null | wc -c | tr -d ' '; } || true )"
+[ "${tok_len:-0}" -gt 1 ] || die "the chain's token is not readable at
+${tok_ns}/${tok_name} through context '${ctx}'. The behavioural half of this axis would
+fail AFTER the upgrade had been spent, so it is refused now. If ESO has not produced it
+yet, wait; if it lives elsewhere, set ARUBA_TOKEN_SECRET_NS / ARUBA_TOKEN_SECRET."
+printf '    token            readable at %s/%s (%s bytes)\n' "$tok_ns" "$tok_name" "$tok_len"
 
 say "BEFORE snapshot"
 python3 -I scripts/upgrade_snapshot.py --take "$BEFORE" || die "before-snapshot failed"

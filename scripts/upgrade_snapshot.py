@@ -65,7 +65,8 @@ def kc(args):
 
 
 def take(path):
-    out = {"restdefinitions": [], "crds": {}, "crs": [], "control": {}}
+    out = {"restdefinitions": [], "crds": {}, "crs": [], "controllers": {},
+           "control": {}}
 
     rc, o, e = kc(["get", "restdefinitions.ogen.krateo.io", "-A", "-o", "json"])
     if rc != 0:
@@ -124,6 +125,26 @@ def take(path):
                 "specPropKeys": sorted((spec.get("properties") or {}).keys()),
                 "statusKeys": sorted(st.keys()),
             })
+
+    # THE CONTROLLER IMAGES, because the provider and the generated controllers roll
+    # SEPARATELY. Ten seconds after helm returned, this cluster had oasgen-provider at
+    # 0.84.0, one controller at 0.84.0 and three still at rest-dynamic-controller:0.67.0 --
+    # i.e. a window in which an OLD controller reconciles an ALREADY RE-RENDERED CRD. The
+    # window closed on its own, but a snapshot that does not record images cannot tell a
+    # closed window from one that never closes, and the second is a stuck roll.
+    rc, o, e = kc(["get", "deploy", "-n", "krateo-system", "-o", "json"])
+    if rc != 0:
+        print("snapshot: listing Deployments failed: %s" % e.strip(), file=sys.stderr)
+        return 2
+    for it in (json.loads(o).get("items") or []):
+        ctrs = ((it.get("spec") or {}).get("template") or {}).get("spec") or {}
+        imgs = [c.get("image") for c in (ctrs.get("containers") or [])]
+        st = it.get("status") or {}
+        out["controllers"][it["metadata"]["name"]] = {
+            "images": imgs,
+            "readyReplicas": st.get("readyReplicas", 0),
+            "replicas": st.get("replicas", 0),
+        }
 
     out["control"] = {"restdefinitions": len(out["restdefinitions"]),
                       "crds": len(out["crds"]), "crs": len(out["crs"])}
@@ -268,6 +289,32 @@ def diff(before_path, after_path, to_version=None):
         if ca["specSHA"] != cb["specSHA"]:
             note.append("%-24s spec hash changed %s -> %s (keys unchanged)"
                         % (label, ca["specSHA"], cb["specSHA"]))
+
+    # --- did the image roll COMPLETE? The provider and each generated controller are
+    # separate Deployments and roll separately, so "the provider is on the new version"
+    # does not mean the controllers are.
+    STACK = ("ghcr.io/krateo-platformops/oasgen-provider",
+             "ghcr.io/krateo-platformops/rest-dynamic-controller")
+    seen_stack = 0
+    for name, d in sorted((b.get("controllers") or {}).items()):
+        for img in d.get("images") or []:
+            if not any(img.startswith(r + ":") for r in STACK):
+                continue
+            seen_stack += 1
+            tag = img.rsplit(":", 1)[-1]
+            if to_version and tag != to_version:
+                fail.append("Deployment %s still runs %s after the upgrade. The provider "
+                            "and the generated controllers roll separately, so an OLD "
+                            "controller reconciling an ALREADY RE-RENDERED CRD is a real "
+                            "window -- this one did not close." % (name, img))
+            else:
+                note.append("%-46s %s" % (name, img))
+        if d.get("replicas") and d.get("readyReplicas", 0) < d.get("replicas"):
+            fail.append("Deployment %s has %s/%s ready replicas after the upgrade"
+                        % (name, d.get("readyReplicas"), d.get("replicas")))
+    if b.get("controllers") is not None and seen_stack == 0 and to_version:
+        void.append("the after snapshot records no oasgen-provider or "
+                    "rest-dynamic-controller image, so the image roll was not checked")
 
     print("=== upgrade axis: %s -> %s" % (before_path, after_path))
     print("    before: %s" % a.get("control"))
