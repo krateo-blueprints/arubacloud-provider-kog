@@ -160,7 +160,26 @@ TIERS = {
         "response rather than the create body across all 34: the POST is "
         "metadata-wrapped while both reads return a flat DTO, so the original "
         "`identifiers: [metadata.name]` could never match and the controller would "
-        "have re-POSTed every reconcile, without bound, against a live account",
+        "have re-POSTed every reconcile, without bound, against a live account. "
+        "**UPDATED 2026-11-18: the correction to `name` does not reach the item root "
+        "either, and no identifier value can.** Measured by an offline walk of the "
+        "vendored document: the GET response's top level is `{actions, alertModel, id, "
+        "lastActivation, lastEdit, lastReception, request, resourceUid, "
+        "resourceVersion}` — flat in the sense of *not* `{metadata, properties}`, which "
+        "is what this note meant, but the only `name` sits under an **echoed request "
+        "envelope** at `request.name`, and the findby's at `values[].request.name`. "
+        "`identifiers` is ONE path applied to BOTH sides — the response item **and** "
+        "`spec.<path>`/`status.<path>` on the CR — so `['request.name']` resolves in the "
+        "response, fails on the CR side, and produces the very unbounded re-POST "
+        "described above. The other 35 kinds work because their two sides **agree** on "
+        "the path, not because dotted paths are tolerated. Nothing in the CRD bridges "
+        "disjoint shapes today: `fieldMapping` carries `inResponse` and "
+        "`inCustomResource`, but `builder.go:35` applies request-direction entries only "
+        "and the client struct holds no mapping, so the comparison cannot consult it — "
+        "[oasgen-provider#845](https://github.com/krateo-platformops/oasgen-provider/issues/845). "
+        "Gated statically by `verify_identifiers_exist_in_response_schema` (35 of 36 "
+        "clean) and deliberately **not** fixed: every candidate fix creates duplicates, "
+        "and the collection 404s here so no run could confirm one",
     ),
     ("network", "SecurityGroup"): (
         "ga",

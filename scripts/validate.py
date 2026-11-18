@@ -130,6 +130,7 @@ def main():
     verify_ga_chain_shape(errors)
     verify_no_return_in_finally(errors)
     verify_create_pending_predicate(errors)
+    verify_identifiers_exist_in_response_schema(errors)
     verify_maturity_counts_match(errors)
     verify_parity_page_names_every_kind(errors)
     verify_status_fields_exist_in_response_schema(errors)
@@ -1294,6 +1295,214 @@ def verify_create_pending_predicate(errors):
     print("Checked the #818 latch predicate against fixtures: both outcomes, the "
           "not-requested control, both runtimes' timestamp formats (mixed offset, "
           "trailing-zero trim, nanosecond precision) and three unorderable stamps.")
+
+
+# Kinds whose declared identifiers are NOT findable at the item root of their observe
+# response. Every entry must carry the measured reason and the fix, and the gate below
+# errors if an entry stops applying -- a stale allowlist exempts the next kind that breaks
+# under a comment about a different one.
+IDENTIFIER_NOT_IN_RESPONSE = {
+    "AlertRule": (
+        "declares identifiers: ['name'], and `name` does not exist at the item root of "
+        "either observe response. The GET response echoes the original request under a "
+        "`request` key, so the only `name` is at `request.name`; the findby's is at "
+        "`values[].request.name`. MEASURED 2026-11-18 by an offline walk of the vendored "
+        "document, NOT by a run -- AlertRule is one of four kinds no GA chain covers, so "
+        "nothing has ever exercised it.\n\n"
+        "DO NOT 'FIX' THIS WITH `identifiers: ['request.name']`. That was this entry's "
+        "first suggestion and it is WRONG in the dangerous direction -- it would CAUSE the "
+        "failure described above rather than avoid it. oasgen-provider traced the "
+        "mechanism: `identifiers` is ONE path applied to BOTH sides. The response lookup "
+        "(`isItemMatch` -> `NestedFieldNoCopy`) is depth-agnostic and WOULD find "
+        "`values[].request.name`; the CR lookup (`isInResource`, clienttools.go:204) then "
+        "asks for `spec.request.name` AND `status.request.name`, and this CR has neither. "
+        "No match, findby answers absent, a duplicate is created.\n\n"
+        "AND THAT EXPLAINS WHY THE OTHER 30 WORK: `metadata.name` succeeds on 28 kinds "
+        "because the response item and the CR AGREE on the path (item `metadata.name`, CR "
+        "`spec.metadata.name`). Depth was never the constraint -- agreement was. "
+        "AlertRule's request envelope and response share no top-level key at all, so NO "
+        "single path can satisfy both sides and `identifiers` cannot express it at any "
+        "depth.\n\n"
+        "AND NOTHING IN THE CRD CAN EXPRESS IT TODAY -- so do not go looking for the "
+        "configuration that fixes this, because there isn't one. `verbsDescription[]."
+        "fieldMapping` is the only mechanism with SEPARATE destinations (its items carry "
+        "`inResponse` and `inCustomResource`, measured on the served CRD at 0.84.0, while "
+        "`requestFieldMapping` has no response direction at all) -- but oasgen-provider "
+        "traced the wiring and the response direction NEVER REACHES THE COMPARISON: "
+        "builder.go:35 applies only request-direction entries, and the client struct "
+        "carries IdentifierFields, IdentifiersMatchPolicy and Resource with no mapping of "
+        "any kind, so `isItemMatch` has nothing to consult. Their own `isInResource` doc "
+        "comment carries a TODO about adding a ResponseFieldMapping 'possibly in future "
+        "versions'. It is a GAP, not a misconfiguration of ours.\n\n"
+        "Filed upstream as oasgen-provider#845, deliberately titled by the SYMPTOM -- "
+        "'findby cannot match a response whose identifier path differs from the CR's, and "
+        "the obvious fix creates duplicates' -- because a mechanism-titled issue is "
+        "unfindable by whoever hits this next. A TODO inside the function is invisible to "
+        "anyone who has not already found the function, and finding it is the hard part. "
+        "REMOVE THIS ENTRY when #845 ships, and re-run the kind through a chain before "
+        "trusting it -- AlertRule has still never been run."),
+}
+
+
+def verify_identifiers_exist_in_response_schema(errors):
+    """Every declared identifier must be findable at the item root of the observe response.
+
+    WHY THIS IS A DIFFERENT GATE FROM THE STATUS-FIELD ONE. The sibling check above proves
+    additionalStatusFields paths exist in the response. Identifiers were never checked, and
+    they carry more weight: an identifier is how `findby` decides whether the resource
+    EXISTS. One that cannot be located in the response makes the match fail, the check
+    answers "absent" for a resource that is present, and on first contact a CREATE follows.
+    That is the same failure shape as narrowing a findby with `offset`/`limit` -- a
+    successful 200 that is indistinguishable from absence -- and it is reachable here
+    without any Configuration at all, from the definition alone.
+
+    UNRESOLVED IS NOT ABSENT, and this gate counts what it skipped. A document, operation
+    or response schema that will not resolve is its own error naming the stage, never a
+    missing-identifier report and never silence.
+
+    Measured when written: 35 of 36 kinds locate every identifier at the item root, 0 were
+    skipped, and the one exception is in the allowlist above with its reason.
+    """
+    cm_by_name = {}
+    for f in sorted(glob.glob("configmaps/*.yaml")):
+        cm = yaml.safe_load(open(f))
+        if cm and (cm.get("metadata") or {}).get("name"):
+            cm_by_name[cm["metadata"]["name"]] = cm.get("data") or {}
+
+    def deref(doc, node, seen=None):
+        seen = seen or set()
+        while isinstance(node, dict) and "$ref" in node:
+            ref = node["$ref"]
+            if ref in seen or not ref.startswith("#/"):
+                return None
+            seen.add(ref)
+            cur = doc
+            for seg in ref[2:].split("/"):
+                if not isinstance(cur, dict) or seg not in cur:
+                    return None
+                cur = cur[seg]
+            node = cur
+        return node
+
+    def props_of(doc, schema):
+        schema = deref(doc, schema)
+        if not isinstance(schema, dict):
+            return {}
+        out = dict(schema.get("properties") or {})
+        for sub in schema.get("allOf") or []:
+            sub = deref(doc, sub)
+            if isinstance(sub, dict):
+                out.update(sub.get("properties") or {})
+        return out
+
+    def walk(doc, schema, prefix="", depth=0, seen=None, out=None):
+        out = {} if out is None else out
+        seen = seen or set()
+        schema = deref(doc, schema)
+        if not isinstance(schema, dict) or depth > 12:
+            return out
+        if id(schema) in seen:
+            return out
+        seen = seen | {id(schema)}
+        for name, sub in props_of(doc, schema).items():
+            path = "%s.%s" % (prefix, name) if prefix else name
+            out[path] = depth
+            sub_d = deref(doc, sub) or {}
+            if sub_d.get("type") == "array":
+                walk(doc, sub_d.get("items") or {}, path + "[]", depth + 1, seen, out)
+            else:
+                walk(doc, sub_d, path, depth + 1, seen, out)
+        return out
+
+    def response_schema(doc, op):
+        for code in ("200", "201", "202"):
+            r = deref(doc, (op.get("responses") or {}).get(code)) or {}
+            content = r.get("content") or {}
+            for ct in ("application/json", "application/json; charset=utf-8", "*/*"):
+                if ct in content:
+                    return (content[ct] or {}).get("schema") or {}
+            if content:
+                return (list(content.values())[0] or {}).get("schema") or {}
+        return None
+
+    checked, offenders = 0, {}
+    for path in sorted(glob.glob("restdefinitions/**/*.yaml", recursive=True)):
+        d = yaml.safe_load(open(path))
+        if not d or d.get("kind") != "RestDefinition":
+            continue
+        spec = d.get("spec") or {}
+        res = spec.get("resource") or {}
+        kind = res.get("kind", path)
+        ids = res.get("identifiers") or []
+        if not ids:
+            continue
+        verbs = {v.get("action"): v for v in (res.get("verbsDescription") or [])
+                 if isinstance(v, dict)}
+        obs = verbs.get("findby") or verbs.get("get")
+        if not obs:
+            errors.append("%s: declares identifiers but neither findby nor get, so they "
+                          "were NOT checked" % kind)
+            continue
+        oas = obs.get("oasPath") or spec.get("oasPath") or ""
+        parts = oas[len("configmap://"):].split("/") if oas.startswith("configmap://") else []
+        if len(parts) != 3 or parts[1] not in cm_by_name or parts[2] not in cm_by_name[parts[1]]:
+            errors.append("%s: cannot resolve oasPath %r, so its identifiers were NOT "
+                          "checked" % (kind, oas))
+            continue
+        try:
+            doc = json.loads(cm_by_name[parts[1]][parts[2]])
+        except ValueError as exc:
+            errors.append("%s: document will not parse (%s), so its identifiers were NOT "
+                          "checked" % (kind, exc))
+            continue
+        op = ((doc.get("paths") or {}).get(obs.get("path")) or {}).get(
+            (obs.get("method") or "get").lower())
+        if not op:
+            errors.append("%s: %s %s is not in its document, so its identifiers were NOT "
+                          "checked" % (kind, (obs.get("method") or "?").upper(),
+                                       obs.get("path")))
+            continue
+        sch = response_schema(doc, op)
+        if sch is None:
+            errors.append("%s: the observe verb declares no 2xx JSON response, so its "
+                          "identifiers were NOT checked" % kind)
+            continue
+        paths = set(walk(doc, sch))
+        roots = [""]
+        for w in ("values", "items", "value", "data", obs.get("itemsPath") or ""):
+            if w and (w in paths or any(p.startswith(w + "[].") for p in paths)):
+                roots += [w + "[].", w + "."]
+        checked += 1
+        missing = [i for i in ids if not any((r + i) in paths for r in roots)]
+        if missing:
+            offenders[kind] = missing
+
+    for kind, missing in sorted(offenders.items()):
+        if kind in IDENTIFIER_NOT_IN_RESPONSE:
+            continue
+        errors.append(
+            "%s: identifier(s) %s are not at the item root of the observe response. A "
+            "findby decides whether the resource EXISTS; an identifier it cannot locate "
+            "makes the match fail, the check answers 'absent' for a resource that is "
+            "present, and a CREATE follows. 30 of 36 definitions use a dotted path "
+            "(e.g. metadata.name), so the fix is usually a path rather than a bare key. "
+            "If this is genuinely intended, add it to IDENTIFIER_NOT_IN_RESPONSE with the "
+            "measured reason." % (kind, missing))
+    for kind in sorted(set(IDENTIFIER_NOT_IN_RESPONSE) - set(offenders)):
+        errors.append(
+            "%s is listed in IDENTIFIER_NOT_IN_RESPONSE but its identifiers now DO resolve "
+            "at the item root (or the kind is gone). Remove the entry -- a stale allowlist "
+            "exempts the next kind that breaks, under a comment about a different one."
+            % kind)
+
+    if checked == 0:
+        errors.append("verify_identifiers_exist_in_response_schema checked ZERO kinds. "
+                      "There were 36 definitions on 2026-11-18, so zero means the walk "
+                      "broke rather than that the repository changed.")
+    else:
+        print("Checked identifiers against the observe response schema across %d kind(s) "
+              "(%d allowlisted with a measured reason)"
+              % (checked, len(IDENTIFIER_NOT_IN_RESPONSE)))
 
 
 def find_helm():
