@@ -22,8 +22,46 @@ expensive, and it needs no change to the RestDefinition.
 | `observe-delete` | observe, delete — **never create or update** |
 | `observe` | observe only |
 
-Enforced by `meta.IsActionAllowed`, which reads the annotation and defaults to
-`default` when unset.
+> **Correction (2026-11-18): only the DELETE column is enforced today.** This section said
+> "Enforced by `meta.IsActionAllowed`, which reads the annotation and defaults to `default`
+> when unset." That function exists and **nothing in `unstructured-runtime` calls it**
+> through v1.27.1 — measured across the module cache, with a control: in the same version
+> `WasDeleted` has 7 call sites, `IsPaused` 1, `ExternalCreateIncomplete` 1 and
+> `GetExternalCreatePending` 1, so the search does find helpers that are consulted.
+>
+> What IS honoured is `meta.ShouldDelete` (`meta.go:362`), which reads **both** annotations
+> and is called from `worker.go:617`. So `management-policy` governs **deletion** today and
+> does **not** gate create or update on a managed CR.
+>
+> The create/update gate arrives in **unstructured-runtime v1.28.0**, which refuses create
+> and update under `observe`, `observe-delete` or any unknown value, and reports an absent
+> resource under `observe` as `Synced=False` / `ReconcileError` with a
+> `CannotObserveExternalResource` event. Until a pin ships that runtime, treat the
+> never-create-or-update rows below as **intent, not enforcement**.
+>
+> **A TYPO IN THIS ANNOTATION REPORTS SUCCESS.** v1.28.0's gate ships without the
+> validity condition, so an unrecognised value — `obserev`, `observe_only`, `Observe` —
+> is treated as "not permitted to create or update" and produces:
+>
+> ```
+> no create, no update, Synced=TRUE (a no-op success), no event,
+> and orphan on CR delete (the finalizer is removed with no handler Delete)
+> ```
+>
+> So a misspelling does not fail loudly and does not fall back to `default`. It produces a
+> CR that **affirmatively reports itself synchronised while nothing is written**, which is
+> worse than silence: there is a green condition to point at. Until `ManagementPolicyInvalid`
+> arrives (later, with the plumbing package), **the only check on this annotation is
+> spelling it correctly**, and the table above is the list of values that mean anything.
+>
+> Relayed from core-provider via oasgen-provider, not measured here: this repository has no
+> cluster on a runtime that ships the gate.
+>
+> One further distinction that cost a wrong reading on the way here:
+> oasgen-provider's own `restdefinition.go` DOES call `IsActionAllowed` for create, update
+> and delete — but on the **RestDefinition** CR, not on the managed resources
+> rest-dynamic-controller reconciles. The annotation on a `Vpc` and the annotation on a
+> `RestDefinition` were never enforced by the same code.
 
 ## `krateo.io/deletion-policy`
 
@@ -35,7 +73,10 @@ Enforced by `meta.IsActionAllowed`, which reads the annotation and defaults to
 ## Use it for observation runs
 
 Pointing a CR at a resource you did not create is exactly where an accidental `PUT`
-is unaffordable. Both annotations together make it structurally impossible:
+is unaffordable. **Both annotations together express that intent. Until the pin ships
+unstructured-runtime v1.28.0 or later, only the `orphan` half is enforced** — an earlier
+version of this sentence said they "make it structurally impossible", which was false for
+every runtime this repository has ever pinned:
 
 ```yaml
 metadata:
@@ -58,7 +99,12 @@ instrument, for two reasons worth stating plainly:
   it does not prevent the controller from acting when drift *is* detected. It is a
   narrower diff, not a safety interlock.
 
-`management-policy` is per-CR and blocks the action itself. Prefer it. `compareScope`
+`management-policy` is per-CR and is **intended** to block the action itself; it will do so
+from v1.28.0, and today it blocks only deletion. That makes the comparison with
+`compareScope` narrower than this section first claimed: `compareScope` restricts
+comparison rather than action, which is a real limitation, but calling it "the wrong
+instrument" implied the alternative was already a working interlock for create and update.
+It was not. `compareScope`
 remains the right tool for its actual purpose — deciding which fields constitute
 drift for a resource you genuinely do manage.
 
