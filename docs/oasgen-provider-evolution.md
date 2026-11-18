@@ -2218,7 +2218,10 @@ production — which is the only reason the instrument was suspected instead of 
   RestDefinition CRD does not declare it, Kubernetes prunes it, and an update then sends
   each map WHOLE. Measured here: 0 of 36 definitions declare it today (control: 33 of 36
   declare `additionalStatusFields`), so there is no instance — by luck, not design.
-* **#818, present from 0.80.0**: a create answering 404 stamps
+* **#818, present from 0.75.0 through 0.83.1** (CORRECTED 2026-11-18: this said "from
+  0.80.0", too narrow by five releases and wrong in the reassuring direction -- the
+  boundary is the `unstructured-runtime` version, v1.21.1 clearing unconditionally and
+  v1.22.0 guarding, which oasgen 0.74.0 and 0.75.0 ship respectively): a create answering 404 stamps
   `krateo.io/external-create-pending` and it never clears. Its exposure is a FRESH install,
   which is exactly what a bump-verification cluster is, so it will bite the measurement
   rather than steady state. Fixed only on oasgen's unreleased main (#825).
@@ -2256,7 +2259,8 @@ drift injected and corrected, delete verified absent, residue zero.**
 
 ### oasgen#818 did not fire, and here is what that is worth
 
-#818 (present from 0.80.0, fixed only on unreleased main by #825) stamps
+#818 (present from **0.75.0** through 0.83.1 -- CORRECTED from "0.80.0" on 2026-11-18,
+see the release.md obstacle row for the runtime-version boundary; fixed in 0.84.0 by #825) stamps
 `krateo.io/external-create-pending` on a create answering 404 and nothing clears it. Its
 exposure is a FRESH install, which is exactly what this cluster was, so it was sampled
 rather than hoped about: `scripts/create_pending_latch_check.py` ran every 20 seconds for
