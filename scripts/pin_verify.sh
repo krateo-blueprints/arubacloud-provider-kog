@@ -262,17 +262,24 @@ export KUBECONFIG="${PIN_KUBECONFIG}"
 # A case, not an indirect variable: `eval "reason=\${LOCAL_SKIP_REASON_${v//./_}}"` works
 # and is unreadable, and shellcheck cannot see the use so it warns the reasons are dead.
 # The reason belongs beside the version it explains.
-case "$PIN" in
-  0.53.0)
-    die "0.53.0 is on THIS REPO'S local skip list, not oasgen's.
-    It stamps \`default: {}\` on 240 optional object paths. 238 are inert; the one that is
-    not makes a Vpc submitted with a partial spec.properties claim the region-unique
-    default role it never asked for, and the vendor then rejects a LATER, innocent Vpc
-    with 'Only one default vpc for region is admissible'.
-    oasgen declined to retract it for everyone, and that was the right call: the harm
-    needs a corpus carrying a semantically loaded default under an optional object.
-    Use 0.54.1." ;;
-esac
+# GATE 2 IS CURRENTLY EMPTY, and that is a result rather than an omission.
+#
+# Both entries this repo once carried are now in the PRODUCER's list, so keeping them here
+# would mean two sources of truth per version, and the local copy is the one that rots:
+#
+#   0.54.0  accepted upstream as oasgen#831, removed from here the same day
+#   0.53.0  declined upstream at first -- 238 of its 240 stamped paths are inert, and the
+#           harm needs a corpus carrying a semantically loaded default under an optional
+#           object, so retracting it for everyone would have pushed consumers off a version
+#           that could not hurt them. oasgen later listed it with the grant removal as the
+#           stated mechanism, so gate 1 catches it now. Verified, not assumed:
+#           `check_retracted.py 0.53.0` returns RETRACTED / use 0.54.1, and the list carries
+#           7 entries.
+#
+# The structure stays because the DISTINCTION stays: the producer's list says "nobody should
+# pin this", and this gate says "THIS REPO cannot use this". A future local finding goes
+# here, as a `case "$PIN" in <version>) die "..." ;; esac`, and only moves upstream if the
+# reason generalises beyond this corpus.
 
 say "retraction gate: asking oasgen whether ${PIN} is retracted"
 python3 -I "$(dirname "$0")/check_retracted.py" "$PIN"
