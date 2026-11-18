@@ -19,7 +19,30 @@ permissions:
   packages: write
 
 jobs:
+  # PUBLISHING.md rule 12: the repository's last word before the release publishes anything.
+  #
+  # WHY IT IS NEEDED HERE SPECIFICALLY. This workflow's tag filter is
+  # `[0-9]+.[0-9]+.[0-9]+`, which admits `0.015.0` -- all digits and dots. publish-chart
+  # refuses a non-plain-X.Y.Z version under rule 13, but it runs at INDEX time, AFTER the
+  # GHCR push. So such a tag today would push a chart that is then never indexed: published
+  # and invisible, the worst of both. This job applies the same pattern BEFORE the push.
+  #
+  # It also runs `hack/release-preflight` if this repository grows one. There is none today,
+  # and the job says so and passes rather than succeeding silently -- and if one appears but
+  # loses its executable bit, it FAILS instead of being skipped exactly when it mattered.
+  #
+  # Named `release-preflight`, not `preflight`: the reusable's own job is `preflight`, and
+  # two jobs of that name in one graph read as the same job in logs and in `needs:`.
+  release-preflight:
+    uses: krateo-blueprints/charts/.github/workflows/release-preflight.yaml@70095ab05f1c5dc6c8dd39d0b1fdbbc7382a841c # 1.4.3
+    permissions:
+      contents: read
+    with:
+      version: ${{ github.ref_name }}
+
   package-and-push:
+    # A block list, so a refused preflight stops the push rather than racing it.
+    needs: [release-preflight]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -250,7 +273,9 @@ jobs:
   # Second half of the standard's rule 1: the same bytes also reach the helm index here,
   # because the Marketplace installs from the index and never re-resolves against GHCR.
   #
-  # MUST BE PINNED BY FULL COMMIT SHA BEFORE THIS MERGES, with a `# 1.0.0` comment.
+  # MUST BE PINNED BY FULL COMMIT SHA, with ITS OWN version as the trailing comment --
+  # not a version named here, which is a second copy that goes stale the next time the
+  # pin moves. This line said `# 1.0.0` while the pin below reached 1.4.3.
   # This workflow receives CHARTS_PUBLISH_TOKEN, an org-wide write token, so a moving
   # major tag would hand that token to whatever `1` points at next.
   #
@@ -294,7 +319,7 @@ jobs:
   # the trade -- a SHA pin with nothing to update it is permanently stale.
   publish-to-index:
     needs: package-and-push
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@aea92de356085f50ea45477a4e6ae2b026cd6b14 # 1.4.2
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@70095ab05f1c5dc6c8dd39d0b1fdbbc7382a841c # 1.4.3
     with:
       source_repo: ${{ github.repository }}
       git_tag: ${{ github.ref_name }}
