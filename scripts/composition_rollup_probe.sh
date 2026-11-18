@@ -225,12 +225,44 @@ kubectl --context "$CTX" get deploy -n "$NS" \
   | grep -E 'oasgen|rest-dynamic' || note "(no oasgen/rdc deployment matched -- report this verbatim)"
 
 # ------------------------------------------------------------------------ core-provider
-say "installing core-provider${CORE_PROVIDER_VERSION:+ ${CORE_PROVIDER_VERSION}}"
-CP_VERSION_ARGS=()
-[ -n "$CORE_PROVIDER_VERSION" ] && CP_VERSION_ARGS=(--version "$CORE_PROVIDER_VERSION")
+# TWO charts, crds first, both pinned to ONE version. The core-provider chart installs no
+# CRDs at all -- measured: its manifest contains ServiceAccounts, ConfigMaps and a PDB, and
+# `kubectl get crd` found nothing in core.krateo.io after a successful install, so the
+# CompositionDefinition apply failed with "no matches for kind". Same split as
+# oasgen-provider / oasgen-provider-crds, which pin_verify.sh already installs in that
+# order.
+#
+# The version is resolved ONCE and used for both. Letting helm pick latest per chart would
+# install two charts that are only coincidentally in step, and a release landing mid-run
+# would split them -- installer has a whole gate about version lines for this reason.
+if [ -z "$CORE_PROVIDER_VERSION" ]; then
+  CORE_PROVIDER_VERSION="$(helm show chart \
+    oci://ghcr.io/krateo-platformops/charts/core-provider 2>/dev/null \
+    | awk '/^version:/{print $2; exit}')"
+  [ -n "$CORE_PROVIDER_VERSION" ] || die "could not resolve the current core-provider chart
+version, and this script will not let helm choose one per chart"
+  note "resolved core-provider chart ${CORE_PROVIDER_VERSION}; both charts pinned to it"
+fi
+
+say "installing core-provider-crds ${CORE_PROVIDER_VERSION}"
+helm --kube-context "$CTX" upgrade --install core-provider-crds \
+  oci://ghcr.io/krateo-platformops/charts/core-provider-crds \
+  --version "$CORE_PROVIDER_VERSION" \
+  --namespace "$NS" --create-namespace --wait --timeout 5m \
+  >/dev/null || die "core-provider-crds install failed"
+
+# CONTROL: assert the CRD is SERVED before anything tries to apply one. Discovering this
+# at apply time is what cost the previous run -- "no matches for kind" reads like a bad
+# manifest, and the manifest was fine.
+kubectl --context "$CTX" get crd compositiondefinitions.core.krateo.io >/dev/null 2>&1 \
+  || die "core-provider-crds installed but compositiondefinitions.core.krateo.io is not
+served. Nothing below can work; report this verbatim rather than retrying."
+note "compositiondefinitions.core.krateo.io is served"
+
+say "installing core-provider ${CORE_PROVIDER_VERSION}"
 helm --kube-context "$CTX" upgrade --install core-provider \
   oci://ghcr.io/krateo-platformops/charts/core-provider \
-  ${CP_VERSION_ARGS[@]+"${CP_VERSION_ARGS[@]}"} \
+  --version "$CORE_PROVIDER_VERSION" \
   --namespace "$NS" --create-namespace --wait --timeout 10m \
   >/dev/null || die "core-provider install failed"
 
