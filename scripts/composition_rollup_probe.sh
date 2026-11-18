@@ -326,35 +326,70 @@ CHART_URL="http://probe-chart.${NS}.svc.cluster.local/${TGZ}"
 # Prove the URL serves the bytes BEFORE handing it to cdc. Without this, an unreachable
 # chart and a cdc that cannot parse one are the same symptom, and the second is a finding
 # while the first is a typo.
-say "control: the chart URL serves the archive from inside the cluster"
-# RETRIED, with a short per-attempt timeout, and the reason is specific. A single attempt
-# fired right after `rollout status` FAILED here once: the Deployment was Ready and the
-# EndpointSlice existed, but the ClusterIP was not yet programmed into the node dataplane.
-# An unprogrammed ClusterIP DROPS packets rather than refusing them, so the symptom is a
-# two-minute timeout that reads exactly like a broken chart server -- and when it was
-# diagnosed minutes later, pod-to-pod, pod-to-ClusterIP and the server itself all answered
-# HTTP 200 in under a millisecond.
-#
-# So: `-m 5` per attempt so a black hole fails fast instead of hanging, and a bounded
-# retry so a few seconds of dataplane lag is not reported as an unreachable chart. The
-# control still FAILS HARD if it never succeeds -- an unreachable chart and a chart cdc
+# Fetch a URL from inside the cluster and print "HTTP:<code>" plus whatever the body was.
+# Same apply/wait/logs shape as aruba_get, and for the same reason: `kubectl run --rm -i`
+# is NOT a reliable way to capture a container's stdout here. Measured on this cluster --
+# with stderr dropped it produced ZERO BYTES on stdout, so a `grep` over it could never
+# match however well the fetch worked, and 18 retries all "failed" against a chart server
+# that answered in under a millisecond when asked directly. `kubectl logs` reads what the
+# container actually wrote.
+chart_probe() {
+  local url="$1" name="chart-check-${RANDOM}${RANDOM}" out=""
+  kubectl --context "$CTX" apply -f - >/dev/null <<YAML || return 1
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${name}
+  namespace: ${NS}
+  labels: { app: chart-check }
+spec:
+  restartPolicy: Never
+  containers:
+  - name: curl
+    image: ${CURL_IMAGE}
+    env:
+    - name: URL
+      value: "${url}"
+    command: ["sh","-c"]
+    args:
+    - |
+      code=\$(curl -sS -m 10 -o /tmp/c.tgz -w '%{http_code}' "\$URL") || code=000
+      printf 'HTTP:%s\\n' "\$code"
+      # Prove it is a real gzipped chart and not an error page that happens to be 200.
+      tar tzf /tmp/c.tgz 2>/dev/null | head -3 || echo "NOT-A-TARBALL"
+YAML
+  kubectl --context "$CTX" wait --for=jsonpath='{.status.phase}'=Succeeded \
+    "pod/${name}" -n "$NS" --timeout=120s >/dev/null 2>&1 || true
+  out="$(kubectl --context "$CTX" logs "pod/${name}" -n "$NS" 2>/dev/null || true)"
+  kubectl --context "$CTX" delete "pod/${name}" -n "$NS" --wait=false >/dev/null 2>&1 || true
+  printf '%s' "$out"
+}
+
+say "control: the chart URL serves a real tarball from inside the cluster"
+# Retried because attempt 2 on this cluster hit a GENUINE connection timeout moments after
+# `rollout status` returned, and the same URL answered later -- an unprogrammed ClusterIP
+# drops packets rather than refusing them, so a few seconds of lag reads as a dead server.
+# It still fails hard if it never succeeds: an unreachable chart and a chart the cdc
 # refuses are the same symptom otherwise, and only the second is a finding.
-chart_fetchable=0
-for attempt in $(seq 1 18); do
-  if kubectl --context "$CTX" run "probe-chart-check-${attempt}" -n "$NS" --rm -i \
-       --restart=Never --quiet --image="$CURL_IMAGE" --command -- \
-       curl -sS -m 5 -o /tmp/c.tgz -w '%{http_code}' "$CHART_URL" 2>/dev/null \
-       | grep -q '^200$'; then
-    chart_fetchable=1
-    note "chart URL answered 200 on attempt ${attempt}"
+chart_ok=0
+for attempt in $(seq 1 12); do
+  probe_out="$(chart_probe "$CHART_URL")"
+  probe_code="$(printf '%s' "$probe_out" | sed -n 's/^HTTP:\([0-9][0-9]*\).*/\1/p' | head -1)"
+  if [ "$probe_code" = "200" ] && ! printf '%s' "$probe_out" | grep -q 'NOT-A-TARBALL'; then
+    chart_ok=1
+    note "chart URL answered 200 with a readable tarball on attempt ${attempt}"
+    printf '%s\n' "$probe_out" | sed -n '2,4p' | sed 's/^/      /'
     break
   fi
-  sleep 5
+  note "attempt ${attempt}: code=${probe_code:-<none>}"
+  sleep 10
 done
-[ "$chart_fetchable" = "1" ] || die "the chart URL was not fetchable in-cluster after 18
-attempts over ~90s: ${CHART_URL}
-The Deployment, the Service and its EndpointSlice are all still up for inspection. Check
-in this order, because each one rules out a different cause: the server itself
+[ "$chart_ok" = "1" ] || die "the chart URL never served a readable tarball from inside the
+cluster: ${CHART_URL}
+Last probe output was: ${probe_out:-<empty>}
+An EMPTY probe output means the PROBE failed, not the server -- check the pod and its logs
+before concluding anything about the chart. If the output shows a code, check in this order
+because each rules out a different layer: the server over localhost
 (\`kubectl exec deploy/probe-chart -- wget -S -O /dev/null http://127.0.0.1/<tgz>\`), then
 pod-to-pod by pod IP, then pod-to-ClusterIP. Nothing below this point would be
 interpretable, so stopping here."
