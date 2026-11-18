@@ -2412,8 +2412,21 @@ SecurityGroup  gen=1;metadata=<same>;properties=vpc
 ```
 
 This is the unmodelled-key warning (oasgen-provider#725) recording itself per CR, and it is
-a real gain: it names vendor response keys the CRD does not model, which is otherwise a
-manual audit across 36 kinds.
+a real gain: it names vendor response keys **the CR's `spec` does not carry**, which is
+otherwise a manual audit across 36 kinds.
+
+**That qualifier is load-bearing, and this paragraph lacked it until 2026-11-19.** It read
+"keys the CRD does not model", which invites "these values are lost". They are not
+necessarily lost: a key surfaced into `status` by `additionalStatusFields` is **still
+listed**. Measured — all four kinds above declare `additionalStatusFields: [metadata.id]`
+and populate `status.id` from it, and all four report `metadata.id` as unmodelled anyway.
+Across this corpus 87 paths are in that category.
+
+The imprecision was ours, not the producer's: oasgen's own event text says the vendor
+"holds keys this CR does not express", its reason constant's comment says the keys are
+"unmodelled in the RestDefinition", and the annotation itself is a dedup signature carrying
+no prose at all. **I proposed a wording fix to oasgen for a sentence I had never read, and
+the sentence that needed fixing was in this file.**
 
 **Read it as a floor, never as an inventory.** oasgen-provider#732 is **open**: the
 comparison is only one level deep, so keys lost inside a nested object are silent — and, in
