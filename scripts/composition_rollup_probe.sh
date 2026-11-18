@@ -327,11 +327,37 @@ CHART_URL="http://probe-chart.${NS}.svc.cluster.local/${TGZ}"
 # chart and a cdc that cannot parse one are the same symptom, and the second is a finding
 # while the first is a typo.
 say "control: the chart URL serves the archive from inside the cluster"
-kubectl --context "$CTX" run probe-chart-check -n "$NS" --rm -i --restart=Never \
-  --image="$HTTPD_IMAGE" --command -- \
-  sh -c "wget -q -O /tmp/c.tgz '${CHART_URL}' && tar tzf /tmp/c.tgz | head -3" \
-  || die "the chart URL is not fetchable in-cluster: ${CHART_URL}
-Nothing below this point would be interpretable, so stopping here."
+# RETRIED, with a short per-attempt timeout, and the reason is specific. A single attempt
+# fired right after `rollout status` FAILED here once: the Deployment was Ready and the
+# EndpointSlice existed, but the ClusterIP was not yet programmed into the node dataplane.
+# An unprogrammed ClusterIP DROPS packets rather than refusing them, so the symptom is a
+# two-minute timeout that reads exactly like a broken chart server -- and when it was
+# diagnosed minutes later, pod-to-pod, pod-to-ClusterIP and the server itself all answered
+# HTTP 200 in under a millisecond.
+#
+# So: `-m 5` per attempt so a black hole fails fast instead of hanging, and a bounded
+# retry so a few seconds of dataplane lag is not reported as an unreachable chart. The
+# control still FAILS HARD if it never succeeds -- an unreachable chart and a chart cdc
+# refuses are the same symptom otherwise, and only the second is a finding.
+chart_fetchable=0
+for attempt in $(seq 1 18); do
+  if kubectl --context "$CTX" run "probe-chart-check-${attempt}" -n "$NS" --rm -i \
+       --restart=Never --quiet --image="$CURL_IMAGE" --command -- \
+       curl -sS -m 5 -o /tmp/c.tgz -w '%{http_code}' "$CHART_URL" 2>/dev/null \
+       | grep -q '^200$'; then
+    chart_fetchable=1
+    note "chart URL answered 200 on attempt ${attempt}"
+    break
+  fi
+  sleep 5
+done
+[ "$chart_fetchable" = "1" ] || die "the chart URL was not fetchable in-cluster after 18
+attempts over ~90s: ${CHART_URL}
+The Deployment, the Service and its EndpointSlice are all still up for inspection. Check
+in this order, because each one rules out a different cause: the server itself
+(\`kubectl exec deploy/probe-chart -- wget -S -O /dev/null http://127.0.0.1/<tgz>\`), then
+pod-to-pod by pod IP, then pod-to-ClusterIP. Nothing below this point would be
+interpretable, so stopping here."
 
 # ------------------------------------------------------------- the CompositionDefinition
 # NO spec.deploy.targetRef, deliberately. core-provider's deploy.IsClusterLocalChartURL
