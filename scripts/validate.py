@@ -129,6 +129,7 @@ def main():
     verify_restaction_jq_compiles(errors)
     verify_ga_chain_shape(errors)
     verify_no_return_in_finally(errors)
+    verify_create_pending_predicate(errors)
     verify_maturity_counts_match(errors)
     verify_parity_page_names_every_kind(errors)
     verify_status_fields_exist_in_response_schema(errors)
@@ -1169,6 +1170,95 @@ def verify_no_return_in_finally(errors):
                 f"pass. Set a flag in the finally and return after the try/finally.")
     if checked:
         print(f"Checked {checked} Python file(s) for `return` in a `finally`.")
+
+
+def verify_create_pending_predicate(errors):
+    """The #818 detector's predicate must report BOTH outcomes, and must stay different
+    from the not-requested-blind predicate it replaced.
+
+    WHY THIS LIVES IN validate.py. scripts/create_pending_latch_check.py has now run
+    against three clusters and printed `latched (#818) : 0` every time. That number is the
+    entire product of the check, and its positive branch has never once executed -- so
+    every "0 latched" has rested on arithmetic nobody ran. Fixtures are the only honest way
+    to run it: planting a real `external-create-pending` on a live CR induces the very
+    defect a bump measurement exists to observe, so the one cluster where a positive could
+    be staged is the one place it must not be.
+
+    WHAT THIS DOES NOT COVER, said plainly: the kubectl walk. That half IS demonstrated
+    live -- runs report `CRs examined : 4` and above, so the walk reaches real objects.
+    What was missing was the decision made about them, and that is what the fixtures cover.
+
+    THE CONTROL. Case (c) is the LoadBalancer/AiKey shape -- pending cleared by
+    `not-requested` alone. A predicate blind to that third clearer calls it LATCHED, which
+    is the false positive the detector was written to avoid. The paired assert proves these
+    fixtures can still tell the two predicates apart, so a regression to the blind form
+    fails here instead of surfacing as 36 phantom latches on a fresh cluster.
+    """
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    try:
+        import create_pending_latch_check as c818
+    except Exception as e:
+        errors.append("cannot import scripts/create_pending_latch_check.py: %s" % e)
+        return
+
+    P = c818.PENDING
+    S = "krateo.io/external-create-succeeded"
+    F = "krateo.io/external-create-failed"
+    N = "krateo.io/external-create-not-requested"
+    # The fixtures name the clearers literally, so a rename upstream must not pass quietly.
+    assert c818.CLEARERS == (S, F, N), c818.CLEARERS
+
+    T0 = "2026-11-18T10:00:00Z"
+    T1 = "2026-11-18T10:00:01Z"
+    T2 = "2026-11-18T10:00:02Z"
+
+    # (a) pending with no clearer at all: the shape a 404 create leaves behind.
+    assert c818.latch_state({P: T0}) == c818.LATCHED
+    # (b) pending strictly newer than its clearer.
+    assert c818.latch_state({P: T1, S: T0}) == c818.LATCHED
+    # (c) cleared by `not-requested` ALONE -- a no-create kind, healthy.
+    assert c818.latch_state({P: T0, N: T1}) == c818.CLEAN
+    # (d) equal stamps: one pass wrote both. The healthy shape measured at the 0.67.0 pin.
+    assert c818.latch_state({P: T0, S: T0}) == c818.CLEAN
+    # (e) newer than `failed` but older than `succeeded`: the max is over ALL clearers.
+    assert c818.latch_state({P: T1, F: T0, S: T2}) == c818.CLEAN
+    # (f) no marker. An empty value is not a marker either.
+    assert c818.latch_state({}) == c818.NO_MARKER
+    assert c818.latch_state({S: T0}) == c818.NO_MARKER
+    assert c818.latch_state({P: ""}) == c818.NO_MARKER
+
+    # CONTROL: the predicate that ignores `not-requested` disagrees on (c). If this assert
+    # ever fails, these fixtures have stopped being able to catch that regression.
+    def blind(ann):
+        pend = ann.get(P)
+        if not pend:
+            return c818.NO_MARKER
+        clears = [ann[k] for k in (S, F) if ann.get(k)]
+        return c818.LATCHED if pend > (max(clears) if clears else "") else c818.CLEAN
+    assert blind({P: T0, N: T1}) == c818.LATCHED, \
+        "the fixture no longer distinguishes the not-requested-blind predicate"
+
+    # Offsets -- the reason _ts parses rather than comparing strings. 10:00+01:00 is 09:00Z,
+    # OLDER than a 09:30Z pending, so this IS a latch; a string compare reads the clearer as
+    # newer and reports CLEAN, hiding it.
+    assert c818.latch_state({P: "2026-11-18T09:30:00Z",
+                             S: "2026-11-18T10:00:00+01:00"}) == c818.LATCHED
+    assert "2026-11-18T09:30:00Z" < "2026-11-18T10:00:00+01:00", \
+        "the offset fixture no longer exercises the case a string compare gets wrong"
+
+    # An unorderable stamp must RAISE, so main() reports COULD NOT TELL rather than folding
+    # the CR into a clean count.
+    for bad in ("not-a-time", "2026-11-18T10:00:00"):
+        try:
+            c818.latch_state({P: bad})
+        except ValueError:
+            pass
+        else:
+            errors.append("create_pending_latch_check.latch_state accepted the unorderable "
+                          "stamp %r instead of raising, so main() would count that CR as "
+                          "clean" % bad)
+    print("Checked the #818 latch predicate against fixtures: both outcomes, the "
+          "not-requested control, a mixed-offset case and two unorderable stamps.")
 
 
 def find_helm():

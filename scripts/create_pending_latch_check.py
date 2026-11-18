@@ -4,10 +4,11 @@
     KUBE_CONTEXT=<ctx> python3 -I scripts/create_pending_latch_check.py [--all-namespaces]
       exit 0  no CR is latched
       exit 1  at least one IS latched -- each is printed with its four timestamps
-      exit 2  COULD NOT TELL -- no CRs examined, or kubectl failed. NOT a pass.
+      exit 2  COULD NOT TELL -- no CRs examined, a stamp could not be ordered, or
+              kubectl failed. NOT a pass.
 
-THE DEFECT (present from oasgen 0.80.0, fixed on main by #825, unreleased as of 0.83.1): a
-create whose request answers 404 stamps `krateo.io/external-create-pending` and nothing ever
+THE DEFECT (present from oasgen 0.75.0 through 0.83.1, fixed by #825 in 0.84.0): a create
+whose request answers 404 stamps `krateo.io/external-create-pending` and nothing ever
 clears it. Its exposure is a FRESH install -- which is exactly what a bump-verification
 cluster is -- so it bites the measurement rather than steady state.
 
@@ -26,7 +27,14 @@ which is the same comparison `meta.ExternalCreateIncomplete` makes. Three things
     one HIDES real latches rather than narrowing the result. A latched CR can report Ready
     from an earlier successful pass, and that combination -- healthy status over a marker
     that will never clear -- is the case most worth finding.
+
+WHY `latch_state` IS A PURE FUNCTION. Every run of this check against a real cluster has
+reported zero, so its positive branch has never executed. A predicate whose positive branch
+has never run is not an instrument; it is an untested claim about one. scripts/validate.py
+asserts it against fixtures on every PR -- both outcomes, plus the control that tells this
+predicate apart from the not-requested-blind one it replaced.
 """
+import datetime
 import json
 import os
 import subprocess
@@ -36,6 +44,53 @@ PENDING = "krateo.io/external-create-pending"
 CLEARERS = ("krateo.io/external-create-succeeded",
             "krateo.io/external-create-failed",
             "krateo.io/external-create-not-requested")
+
+LATCHED, CLEAN, NO_MARKER = "latched", "clean", "no-marker"
+
+
+def _ts(value, what):
+    """Parse an RFC3339 stamp into a comparable datetime, or raise ValueError.
+
+    WHY NOT THE STRING COMPARE THIS USED TO DO. Lexicographic order on RFC3339 preserves
+    chronological order only while every stamp carries the SAME offset. Both annotations are
+    written by one controller process, so in practice they do -- but "in practice" is doing
+    real work in that sentence, and the failure is silent in BOTH directions: a `+01:00`
+    clearer against a `Z` pending can read as newer when it is older (hiding a latch) or
+    older when it is newer (inventing one). Parsing costs these lines and removes the
+    caveat, so the caveat goes rather than getting documented.
+    """
+    v = (value or "").strip()
+    if v[-1:] in ("Z", "z"):
+        v = v[:-1] + "+00:00"
+    try:
+        dt = datetime.datetime.fromisoformat(v)
+    except ValueError as exc:
+        raise ValueError("%s is not an RFC3339 timestamp: %r (%s)" % (what, value, exc))
+    if dt.tzinfo is None:
+        # A stamp with no offset cannot be ordered against one that has it. The runtime
+        # always writes an offset; something else wrote this, and assuming UTC is exactly
+        # the guess this file exists to refuse.
+        raise ValueError("%s carries no timezone offset, so it cannot be ordered: %r"
+                         % (what, value))
+    return dt
+
+
+def latch_state(ann):
+    """LATCHED / CLEAN / NO_MARKER for one object's annotations. Raises on an unorderable stamp."""
+    pend = ann.get(PENDING)
+    if not pend:
+        return NO_MARKER
+    p = _ts(pend, PENDING)
+    newest = None
+    for c in CLEARERS:
+        if ann.get(c):
+            t = _ts(ann[c], c)
+            if newest is None or t > newest:
+                newest = t
+    if newest is None:
+        # pending with no clearer of any kind: the 404-create shape #818 leaves behind.
+        return LATCHED
+    return LATCHED if p > newest else CLEAN
 
 
 def kubectl(args):
@@ -59,7 +114,7 @@ def main(argv):
               file=sys.stderr)
         return 2
 
-    examined, latched, unparsable = 0, [], []
+    examined, latched, unparsable, unorderable = 0, [], [], []
     for kind in sorted(set(kinds)):
         rc, out, err = kubectl(["get", kind] + scope + ["-o", "json"])
         if rc != 0:
@@ -71,17 +126,17 @@ def main(argv):
             continue
         for it in items:
             examined += 1
-            ann = ((it.get("metadata") or {}).get("annotations") or {})
-            pend = ann.get(PENDING)
-            if not pend:
+            md = (it.get("metadata") or {})
+            ann = md.get("annotations") or {}
+            try:
+                state = latch_state(ann)
+            except ValueError as exc:
+                unorderable.append((kind, md.get("namespace"), md.get("name"), str(exc)))
                 continue
-            clears = [ann[c] for c in CLEARERS if ann.get(c)]
-            newest = max(clears) if clears else ""
-            # Strictly newer. RFC3339 from the same writer sorts lexicographically.
-            if pend > newest:
-                latched.append((kind, (it.get("metadata") or {}).get("namespace"),
-                                (it.get("metadata") or {}).get("name"), pend,
-                                {c.rsplit("/", 1)[1]: ann.get(c, "-") for c in CLEARERS}))
+            if state != LATCHED:
+                continue
+            latched.append((kind, md.get("namespace"), md.get("name"), ann.get(PENDING),
+                            {c.rsplit("/", 1)[1]: ann.get(c, "-") for c in CLEARERS}))
 
     print("CRs examined   : %d" % examined)
     print("kinds served   : %d" % len(set(kinds)))
@@ -97,6 +152,15 @@ def main(argv):
         print("    pending       %s" % pend)
         for k, v in others.items():
             print("    %-13s %s" % (k, v))
+
+    if unorderable:
+        print("CONTROL: %d CR(s) carry a stamp that could not be ordered:" % len(unorderable))
+        for kind, ns, name, why in unorderable:
+            print("  %s/%s/%s: %s" % (kind, ns, name, why))
+        if not latched:
+            print("COULD NOT TELL: a 'no latch' verdict that skipped those CRs is a false "
+                  "zero.", file=sys.stderr)
+            return 2
     return 1 if latched else 0
 
 
