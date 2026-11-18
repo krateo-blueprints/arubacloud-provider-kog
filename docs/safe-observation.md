@@ -39,6 +39,24 @@ expensive, and it needs no change to the RestDefinition.
 > `CannotObserveExternalResource` event. Until a pin ships that runtime, treat the
 > never-create-or-update rows below as **intent, not enforcement**.
 >
+> **A TYPO IN THIS ANNOTATION REPORTS SUCCESS.** v1.28.0's gate ships without the
+> validity condition, so an unrecognised value — `obserev`, `observe_only`, `Observe` —
+> is treated as "not permitted to create or update" and produces:
+>
+> ```
+> no create, no update, Synced=TRUE (a no-op success), no event,
+> and orphan on CR delete (the finalizer is removed with no handler Delete)
+> ```
+>
+> So a misspelling does not fail loudly and does not fall back to `default`. It produces a
+> CR that **affirmatively reports itself synchronised while nothing is written**, which is
+> worse than silence: there is a green condition to point at. Until `ManagementPolicyInvalid`
+> arrives (later, with the plumbing package), **the only check on this annotation is
+> spelling it correctly**, and the table above is the list of values that mean anything.
+>
+> Relayed from core-provider via oasgen-provider, not measured here: this repository has no
+> cluster on a runtime that ships the gate.
+>
 > One further distinction that cost a wrong reading on the way here:
 > oasgen-provider's own `restdefinition.go` DOES call `IsActionAllowed` for create, update
 > and delete — but on the **RestDefinition** CR, not on the managed resources
