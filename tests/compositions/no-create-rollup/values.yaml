@@ -1,0 +1,21 @@
+# Values for the no-create rollup probe.
+#
+# Deliberately smaller than the shipped composition's: the probe needs exactly
+# enough to make one Vpc real and one LoadBalancer addressable-by-name, and no
+# knobs that could change what is being measured.
+namespace: default
+projectId: REPLACE_PROJECT_ID
+location: ITBG-Bergamo
+tags: []
+tokenSecret:
+  name: arubacloud-token
+  namespace: default
+  key: token
+apiVersion: "1.0"
+name: probe
+vpc:
+  # Both false on purpose. `preset` fails once the location has any VPC, and
+  # `default` claims the region-unique default role -- either one turns a
+  # measurement of the ROLLUP into a measurement of a Vpc create failure.
+  default: false
+  preset: false
