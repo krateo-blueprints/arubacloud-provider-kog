@@ -254,10 +254,17 @@ jobs:
   # This workflow receives CHARTS_PUBLISH_TOKEN, an org-wide write token, so a moving
   # major tag would hand that token to whatever `1` points at next.
   #
-  # Pinned to the commit tag 1.0.2 points at, verified rather than taken on trust:
+  # Pinned to the commit the tag below points at, verified rather than taken on trust.
+  # RECORD THE COMMAND, NOT ITS OUTPUT (krateo-blueprints/charts PUBLISHING.md, charts#31):
   #
-  #   git ls-remote https://github.com/krateo-blueprints/charts 'refs/tags/1.0.2^{}'
-  #   f0138e816ce827279ad087202889c009899741f7  refs/tags/1.0.2^{}
+  #   git ls-remote https://github.com/krateo-blueprints/charts 'refs/tags/<X.Y.Z>^{}'
+  #
+  # Peel with `^{}`: the bare ref returns the annotated TAG OBJECT, not the commit, so
+  # verifying a pin against it reports a mismatch that is not one.
+  #
+  # A SHA pasted here would be a SECOND COPY that nothing updates, and it had already gone
+  # stale: this comment recorded a verification of 1.0.2 while the `uses:` line below was
+  # bumped to 1.4.0 and then 1.4.2 the same day. The pin's own line is the single source.
   #
   # 1.0.1 fixed the token-in-a-URL defect that half-published github-provider-kog 0.7.6,
   # and then showed a second one on the first green run. The publisher clones gh-pages,
