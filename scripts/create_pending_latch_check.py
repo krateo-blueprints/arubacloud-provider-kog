@@ -12,6 +12,10 @@ whose request answers 404 stamps `krateo.io/external-create-pending` and nothing
 clears it. Its exposure is a FRESH install -- which is exactly what a bump-verification
 cluster is -- so it bites the measurement rather than steady state.
 
+THE TIMESTAMPS ARE PARSED, NOT STRING-COMPARED. See _ts: the two runtimes that write
+these annotations use two different formats, and one of them writes the process's local
+offset. A string compare is silently wrong in the direction that hides a latch.
+
 THE PREDICATE, and why it is written this way. A marker is latched when
 
     pending  is strictly newer than  max(succeeded, failed, not-requested)
@@ -49,17 +53,47 @@ LATCHED, CLEAN, NO_MARKER = "latched", "clean", "no-marker"
 
 
 def _ts(value, what):
-    """Parse an RFC3339 stamp into a comparable datetime, or raise ValueError.
+    """Parse an RFC3339 stamp into a comparable key, or raise ValueError.
 
     WHY NOT THE STRING COMPARE THIS USED TO DO. Lexicographic order on RFC3339 preserves
-    chronological order only while every stamp carries the SAME offset. Both annotations are
-    written by one controller process, so in practice they do -- but "in practice" is doing
-    real work in that sentence, and the failure is silent in BOTH directions: a `+01:00`
-    clearer against a `Z` pending can read as newer when it is older (hiding a latch) or
-    older when it is newer (inventing one). Parsing costs these lines and removes the
-    caveat, so the caveat goes rather than getting documented.
+    chronological order only while every stamp carries the same offset AND the same number
+    of fractional digits. Neither is guaranteed, and BOTH failures are silent in the
+    direction that hides a latch. Measured, in the two runtimes that write these four
+    annotations:
+
+      unstructured-runtime (what THIS repo's controllers run on) -- v1.17.1, v1.27.1 and
+        v1.28.1 all do `t.Format(time.RFC3339)` from `time.Now()`, at pkg/meta/meta.go:232+
+        called from pkg/controller/worker.go. Second precision, no fraction, and NO .UTC():
+        the offset is whatever zone the process is in. UTC only by the distroless default.
+      provider-runtime -- `time.RFC3339Nano` from `time.Now()`, per that repo's own
+        session. RFC3339Nano TRIMS TRAILING ZEROS, so `10:00:00Z` sorts AFTER
+        `10:00:00.1Z` because 'Z' (0x5A) > '.' (0x2E) -- the later instant sorts first.
+
+    So a tool that reads "the create annotations" meets both formats, and the offset hazard
+    is live in the one that writes this repo's CRs. Parsing costs these lines; the caveat
+    goes rather than getting documented.
+
+    The fraction is split off BY HAND rather than left to the interpreter, for two reasons
+    that are both about not trusting the instrument: how many fractional digits
+    `fromisoformat` tolerates has changed across Python versions, and it TRUNCATES past the
+    microsecond -- so `...123456789Z` and `...123456001Z` parse EQUAL and "strictly newer"
+    reads a real latch as clean. The digits past the microsecond are carried separately and
+    the returned key is a tuple, so ordering is exact at nanosecond precision.
     """
     v = (value or "").strip()
+    if not v:
+        raise ValueError("%s is empty, so it cannot be ordered" % what)
+    # The only '.' in an RFC3339 stamp separates the fractional seconds; offsets use ':'.
+    head, dot, rest = v.partition(".")
+    sub = 0
+    if dot:
+        digits = ""
+        while rest[:1].isdigit():
+            digits, rest = digits + rest[0], rest[1:]
+        if not digits:
+            raise ValueError("%s has a '.' with no fractional digits: %r" % (what, value))
+        v = head + "." + (digits + "000000")[:6] + rest
+        sub = int((digits + "000000000")[6:9])      # nanoseconds past the microsecond
     if v[-1:] in ("Z", "z"):
         v = v[:-1] + "+00:00"
     try:
@@ -67,12 +101,12 @@ def _ts(value, what):
     except ValueError as exc:
         raise ValueError("%s is not an RFC3339 timestamp: %r (%s)" % (what, value, exc))
     if dt.tzinfo is None:
-        # A stamp with no offset cannot be ordered against one that has it. The runtime
-        # always writes an offset; something else wrote this, and assuming UTC is exactly
+        # A stamp with no offset cannot be ordered against one that has it. Both runtimes
+        # always write an offset; something else wrote this, and assuming UTC is exactly
         # the guess this file exists to refuse.
         raise ValueError("%s carries no timezone offset, so it cannot be ordered: %r"
                          % (what, value))
-    return dt
+    return (dt, sub)
 
 
 def latch_state(ann):

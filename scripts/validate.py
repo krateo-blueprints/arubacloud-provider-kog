@@ -1246,9 +1246,43 @@ def verify_create_pending_predicate(errors):
     assert "2026-11-18T09:30:00Z" < "2026-11-18T10:00:00+01:00", \
         "the offset fixture no longer exercises the case a string compare gets wrong"
 
+    # --- RFC3339Nano, which is what provider-runtime writes (unstructured-runtime, the
+    # runtime this repo's controllers actually run on, writes second-precision RFC3339 from
+    # time.Now() -- measured at v1.17.1, v1.27.1 and v1.28.1). A tool reading "the create
+    # annotations" meets both, so both are fixtures.
+
+    # The trailing-zero trap. RFC3339Nano trims zeros, so the LATER instant (.1) sorts
+    # BEFORE the earlier one (no fraction), because '.' is 0x2E and 'Z' is 0x5A.
+    assert c818.latch_state({P: "2026-11-18T10:00:00.1Z",
+                             S: "2026-11-18T10:00:00Z"}) == c818.LATCHED
+    assert "2026-11-18T10:00:00.1Z" < "2026-11-18T10:00:00Z", \
+        "the trailing-zero fixture no longer exercises the 'Z' > '.' case a string compare " \
+        "gets wrong"
+
+    # Nanosecond precision survives. fromisoformat truncates past the microsecond, so these
+    # two would parse EQUAL and a strictly-newer test would call a real latch clean.
+    assert c818.latch_state({P: "2026-11-18T10:00:00.123456789Z",
+                             S: "2026-11-18T10:00:00.123456001Z"}) == c818.LATCHED
+    # CONTROL, in two halves: the sub-microsecond digits are carried, and the datetime
+    # halves are identical -- so that fixture can ONLY be passing on the carried digits.
+    assert c818._ts("2026-11-18T10:00:00.123456789Z", "t")[1] == 789, \
+        "digits past the microsecond are no longer carried; sub-microsecond ordering is lost"
+    assert c818._ts("2026-11-18T10:00:00.123456789Z", "t")[0] == \
+        c818._ts("2026-11-18T10:00:00.123456001Z", "t")[0], \
+        "the datetime halves of those two stamps now differ, so the fixture is not testing " \
+        "what it claims to test"
+
+    # Nine digits must parse at all. How many fractional digits fromisoformat tolerates has
+    # moved across Python versions, and CI pins 3.12 while this is developed on 3.14.
+    # pending 09:00:00.000000001Z is OLDER than a clearer at 10:00:00.123456789+01:00,
+    # which is 09:00:00.123456789Z -- so this is CLEAN. Written the other way round first,
+    # and the fixtures caught the expectation rather than the code.
+    assert c818.latch_state({P: "2026-11-18T09:00:00.000000001Z",
+                             S: "2026-11-18T10:00:00.123456789+01:00"}) == c818.CLEAN
+
     # An unorderable stamp must RAISE, so main() reports COULD NOT TELL rather than folding
     # the CR into a clean count.
-    for bad in ("not-a-time", "2026-11-18T10:00:00"):
+    for bad in ("not-a-time", "2026-11-18T10:00:00", "2026-11-18T10:00:00.Z"):
         try:
             c818.latch_state({P: bad})
         except ValueError:
@@ -1258,7 +1292,8 @@ def verify_create_pending_predicate(errors):
                           "stamp %r instead of raising, so main() would count that CR as "
                           "clean" % bad)
     print("Checked the #818 latch predicate against fixtures: both outcomes, the "
-          "not-requested control, a mixed-offset case and two unorderable stamps.")
+          "not-requested control, both runtimes' timestamp formats (mixed offset, "
+          "trailing-zero trim, nanosecond precision) and three unorderable stamps.")
 
 
 def find_helm():
