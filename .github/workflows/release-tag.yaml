@@ -157,7 +157,7 @@ jobs:
         # helm on the runner, which `Install Helm` above provides, and push.sh reads the
         # manifest back using the same credentials, which is why the env below is on the
         # pushing step.
-        uses: krateo-platformops/.github/.github/actions/chart-push@653ac1e67d761584993a774c76963514968b3650 # main 2026-11-18
+        uses: krateo-platformops/.github/.github/actions/chart-push@e1d3e99215e80ae56eca4a67e9e061b2c73168b8 # 1.0.0
 
       - name: Package and push every chart
         env:
@@ -287,7 +287,7 @@ jobs:
   # the trade -- a SHA pin with nothing to update it is permanently stale.
   publish-to-index:
     needs: package-and-push
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@ae27682c30cf6a005e03e77bc18a3f9a194db6ed # 1.4.0
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@aea92de356085f50ea45477a4e6ae2b026cd6b14 # 1.4.2
     with:
       source_repo: ${{ github.repository }}
       git_tag: ${{ github.ref_name }}
