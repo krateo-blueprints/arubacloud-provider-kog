@@ -287,7 +287,7 @@ jobs:
   # the trade -- a SHA pin with nothing to update it is permanently stale.
   publish-to-index:
     needs: package-and-push
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@1e6210ab2a8b66ff1a8d6da86287e671154f44a2 # 1.0.4
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@ae27682c30cf6a005e03e77bc18a3f9a194db6ed # 1.4.0
     with:
       source_repo: ${{ github.repository }}
       git_tag: ${{ github.ref_name }}
