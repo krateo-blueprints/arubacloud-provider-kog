@@ -34,7 +34,10 @@ env:
   # `profile` is in the provider list, so a pin below 0.36.0 ships an AiKey that is
   # wrong or absent. See scripts/providers.py.
   #
-  # THE PIN, 0.52.0:
+  # CURRENT PIN: 0.67.0   <- must equal OASGEN_VERSION below; validate.py enforces it
+  #
+  # THE 0.52.0 STEP (historical -- this block said "THE PIN, 0.52.0" until 2026-11-18,
+  # which was true when written and false for the fifteen releases after the pin moved):
   #   0.52.0  #424  OAS 3.0 `nullable: true` and `minProperties` reach the CRD --
   #           these documents are 3.0.1 and this closes evolution-doc item A1
   #           #421  a fieldMapping no longer deletes the spec property it reads

@@ -121,6 +121,7 @@ def main():
     verify_sample_versions(errors, specs)
     verify_composition_apiversion(errors)
     verify_documented_pin(errors)
+    verify_pin_sources_agree(errors)
     verify_no_builtin_shadowing(errors)
     verify_restaction_filter_envelope(errors)
     verify_no_env_assignment_after_command(errors)
@@ -253,6 +254,64 @@ def verify_composition_apiversion(errors):
 # is an instruction a reader will follow today.
 HISTORICAL_DOCS = ("docs/live-cluster-test.md", "docs/log.md",
                    "docs/oasgen-provider-evolution.md", "docs/release.md")
+
+
+def verify_pin_sources_agree(errors):
+    """The pin is written in THREE places. Nothing checked that they agree.
+
+    verify_documented_pin() treats OASGEN_VERSION in .github/workflows/validate.yaml as
+    the source of truth and checks every markdown file against it. Its docstring says
+    "The pin lives in one place -- OASGEN_VERSION ... which scripts/pin_verify.sh
+    defaults to". That was NOT true: pin_verify.sh carries its own literal default, kept
+    in step by hand, and the workflow carries a prose header naming the pin as well.
+    Neither is markdown, so neither was ever checked.
+
+    Both had already drifted. On 2026-11-18 the workflow's own header said
+    `# THE PIN, 0.52.0:` while OASGEN_VERSION was 0.67.0 -- prose stale by fifteen
+    releases, inside the very file the docs are validated against. This is the same
+    defect class as the skip list that lived in a comment: a statement nothing evaluates.
+
+    This makes that docstring's claim true by enforcing it.
+    """
+    wf_path = os.path.join(".github", "workflows", "validate.yaml")
+    wf = open(wf_path, encoding="utf-8").read()
+
+    env_re = re.compile(r'^\s*OASGEN_VERSION:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', re.M)
+    doc_re = re.compile(r'^\s*#\s*CURRENT PIN:\s*([0-9]+\.[0-9]+\.[0-9]+)', re.M)
+    sh_re = re.compile(r'^PIN="\$\{OASGEN_VERSION:-([0-9]+\.[0-9]+\.[0-9]+)\}"', re.M)
+
+    # A screen that cannot detect a known-bad case is a function that returns false.
+    assert env_re.search('  OASGEN_VERSION: "0.67.0"\n').group(1) == "0.67.0"
+    assert env_re.search('  OASGEN_VERSION: 0.67.0\n') is None          # unquoted is not the form
+    assert doc_re.search("  # CURRENT PIN: 0.67.0   <- note\n").group(1) == "0.67.0"
+    assert doc_re.search("  # THE PIN, 0.52.0:\n") is None               # the stale form must NOT match
+    assert sh_re.search('PIN="${OASGEN_VERSION:-0.67.0}"\n').group(1) == "0.67.0"
+    assert sh_re.search('PIN="0.67.0"\n') is None                        # a bare literal is not the form
+
+    m = env_re.search(wf)
+    if not m:
+        errors.append(f"{wf_path}: no OASGEN_VERSION found, so the pin cannot be checked")
+        return
+    pin = m.group(1)
+
+    d = doc_re.search(wf)
+    if not d:
+        errors.append(f"{wf_path}: no `# CURRENT PIN: <version>` line. The workflow's prose "
+                      f"must name the pin in a form something can evaluate -- a header that "
+                      f"only a human reads is how `THE PIN, 0.52.0` survived to 0.67.0")
+    elif d.group(1) != pin:
+        errors.append(f"{wf_path}: `# CURRENT PIN: {d.group(1)}` but OASGEN_VERSION is {pin}")
+
+    sh_path = os.path.join("scripts", "pin_verify.sh")
+    sh = open(sh_path, encoding="utf-8").read()
+    h = sh_re.search(sh)
+    if not h:
+        errors.append(f"{sh_path}: no `PIN=\"${{OASGEN_VERSION:-<version>}}\"` line to check "
+                      f"against the workflow pin")
+    elif h.group(1) != pin:
+        errors.append(f"{sh_path}: PIN defaults to {h.group(1)} but the workflow pins {pin}. "
+                      f"CI would verify one version and pin_verify another, and the run that "
+                      f"says 'the pin is good' would not be about the pin CI uses")
 
 
 def verify_documented_pin(errors):
