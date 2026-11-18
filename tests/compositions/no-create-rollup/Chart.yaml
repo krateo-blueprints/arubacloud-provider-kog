@@ -1,0 +1,29 @@
+apiVersion: v2
+# PROBE ONLY -- NEVER SHIPPED, NEVER PUBLISHED.
+#
+# This chart exists to answer one question core-provider asked and nothing else:
+# does the reason rest-dynamic-controller writes on a child with NO create verb
+# reach composition-dynamic-controller's rollup and fail the PARENT, naming that
+# child? At the 0.67.0 pin LoadBalancer settles at
+# Ready=False/NoCreateVerbDeclared, and cdc >= 2.13.96 (#496) maps that reason to
+# childFailed -- but the two halves had only ever been measured separately. The
+# parent's condition had never been observed, and docs/oasgen-provider-evolution.md
+# says so in as many words.
+#
+# It renders a LoadBalancer (no create verb -- the failing child) alongside a Vpc
+# (creates and goes Ready -- the contrast), so the parent's message has to name one
+# of the two rather than merely being false.
+#
+# WHY IT IS NOT UNDER compositions/: nothing here may reach a user. No shipped
+# composition renders LoadBalancer or AiKey -- verified: the one shipped chart
+# renders Vpc, Subnet, SecurityGroup -- so the user-visible impact of this whole
+# path today is nil, and the value is the contract across the RDC -> cdc boundary.
+# Shipping a child that can never be created would be a worse artifact than the
+# missing evidence.
+name: aruba-no-create-rollup-probe
+description: >-
+  Probe composition: one child with no create verb (LoadBalancer) plus one that
+  reconciles (Vpc), to observe the parent's rolled-up condition. Not for release.
+type: application
+version: 0.0.0-probe
+appVersion: "0.0.0-probe"

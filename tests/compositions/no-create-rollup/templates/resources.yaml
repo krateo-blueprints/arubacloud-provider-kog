@@ -1,0 +1,59 @@
+{{/*
+  The two children, chosen to make the parent's message discriminating.
+
+  LoadBalancer: declares findby + get and NO create -- the generator prints this
+  from the OAS, it is not a claim typed here. At the 0.67.0 pin it settles at
+  Ready=False/Synced=False both carrying NoCreateVerbDeclared, with
+  krateo.io/external-create-succeeded ABSENT, no CreatedExternalResource event,
+  and the vendor's loadBalancers collection unchanged at 0.
+
+  Vpc: declares all five verbs, creates, and reaches Ready=Available. It is here
+  so the parent's `managed children not healthy: <id>` names ONE child and not
+  simply everything -- a parent that is false with both children broken proves
+  much less.
+
+  apiVersion comes from _generated.tpl for both. Do NOT type one: resource CRDs
+  are served at v1-0-0, and a hard-coded v1alpha1 is what made the first 0.2.0
+  chart uninstallable. Only <Kind>Configuration is v1alpha1.
+
+  No vpcId placeholder here, unlike the shipped chart: neither of these two takes
+  it as a path parameter, so nothing in this chart needs a second apply.
+*/}}
+apiVersion: {{ include "aruba.gen.apiVersion.LoadBalancer" . }}
+kind: LoadBalancer
+metadata:
+  name: {{ .Values.name }}-lb
+  namespace: {{ .Values.namespace }}
+  annotations:
+    krateo.io/connector-verbose: "true"
+spec:
+  configurationRef:
+    name: {{ .Values.name }}-loadbalancer-config
+    namespace: {{ .Values.namespace }}
+  projectId: {{ .Values.projectId | quote }}
+  # The whole spec a no-create kind has: findby selects an EXISTING object by this
+  # value. Nothing on Aruba carries this name, which is the point -- the resource
+  # cannot be found and cannot be created either.
+  metadata:
+    name: {{ .Values.name }}-lb
+---
+apiVersion: {{ include "aruba.gen.apiVersion.Vpc" . }}
+kind: Vpc
+metadata:
+  name: {{ .Values.name }}-vpc
+  namespace: {{ .Values.namespace }}
+  annotations:
+    krateo.io/connector-verbose: "true"
+spec:
+  configurationRef:
+    name: {{ .Values.name }}-vpc-config
+    namespace: {{ .Values.namespace }}
+  projectId: {{ .Values.projectId | quote }}
+  metadata:
+    name: {{ .Values.name }}-vpc
+    location:
+      value: {{ .Values.location | quote }}
+    tags: {{ .Values.tags | default list | toYaml | nindent 6 }}
+  properties:
+    default: {{ .Values.vpc.default }}
+    preset: {{ .Values.vpc.preset }}

@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "namespace",
+    "projectId",
+    "location",
+    "name",
+    "tokenSecret"
+  ],
+  "properties": {
+    "namespace": { "type": "string", "default": "default" },
+    "projectId": { "type": "string", "description": "Aruba project id" },
+    "location": { "type": "string", "description": "Aruba location value, e.g. ITBG-Bergamo" },
+    "apiVersion": { "type": "string", "default": "1.0" },
+    "name": { "type": "string", "description": "Name prefix for both children" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "tokenSecret": {
+      "type": "object",
+      "required": ["name", "namespace", "key"],
+      "properties": {
+        "name": { "type": "string" },
+        "namespace": { "type": "string" },
+        "key": { "type": "string" }
+      }
+    },
+    "vpc": {
+      "type": "object",
+      "properties": {
+        "default": { "type": "boolean", "default": false },
+        "preset": { "type": "boolean", "default": false }
+      }
+    }
+  }
+}

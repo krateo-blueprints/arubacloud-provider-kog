@@ -27,6 +27,7 @@ drift are derived.
 """
 
 import json
+import argparse
 import os
 import sys
 
@@ -75,7 +76,7 @@ HEADER = """{{/*
 """
 
 
-def facts():
+def facts(kinds):
     """kind -> {apiVersion, auth, verbs}, derived, never typed."""
     by_kind = {}
     for prov, doc in load_rds():
@@ -84,7 +85,7 @@ def facts():
 
     specs = {}
     out = {}
-    for kind in KINDS:
+    for kind in kinds:
         if kind not in by_kind:
             raise SystemExit(f"{kind} has no RestDefinition -- the composition "
                              f"references a resource this repo does not generate")
@@ -124,7 +125,21 @@ def render_auth(block):
 
 
 def main():
-    data = facts()
+    # --chart/--kinds exist so a chart OUTSIDE compositions/ can be generated from the
+    # same OAS-derived facts instead of hand-copying this generated file. tests/ uses
+    # it for probe charts that must never ship. Defaults are the shipped chart, so CI's
+    # `--check` is unaffected.
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--chart", default=CHART,
+                    help="chart dir to write templates/_generated.tpl into")
+    ap.add_argument("--kinds", default=",".join(KINDS),
+                    help="comma-separated kinds, in creation order")
+    ap.add_argument("--check", action="store_true",
+                    help="exit 1 if what is on disk is not what would be written")
+    args = ap.parse_args()
+    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
+    out = os.path.join(args.chart, "templates", "_generated.tpl")
+    data = facts(kinds)
     parts = [HEADER]
     for kind, f in data.items():
         parts.append(
@@ -146,18 +161,18 @@ def main():
     parts.append(f'{{{{- define "aruba.gen.kinds" -}}}}{",".join(data)}{{{{- end -}}}}\n')
     body = "\n".join(parts)
 
-    if "--check" in sys.argv:
-        current = open(OUT).read() if os.path.exists(OUT) else ""
+    if args.check:
+        current = open(out).read() if os.path.exists(out) else ""
         if current != body:
-            print(f"STALE: {os.path.relpath(OUT, ROOT)} differs from what "
+            print(f"STALE: {os.path.relpath(out, ROOT)} differs from what "
                   f"gen_composition.py would write -- run it", file=sys.stderr)
             return 1
-        print(f"{os.path.relpath(OUT, ROOT)} is up to date")
+        print(f"{os.path.relpath(out, ROOT)} is up to date")
         return 0
 
-    with open(OUT, "w") as fh:
+    with open(out, "w") as fh:
         fh.write(body)
-    print(f"wrote {os.path.relpath(OUT, ROOT)}")
+    print(f"wrote {os.path.relpath(out, ROOT)}")
     for kind, f in data.items():
         print(f"  {kind:<16} {f['apiVersion']:<38} "
               f"auth={next(iter(f['auth'])):<7} verbs={','.join(f['verbs'])}")
