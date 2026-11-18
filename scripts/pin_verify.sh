@@ -233,6 +233,70 @@ PIN_KUBECONFIG="${PIN_KUBECONFIG:-${TMPDIR:-/tmp}/${CLUSTER_PROVIDER}-${CLUSTER}
 SRC_KUBECONFIG="${SRC_KUBECONFIG:-${HOME}/.kube/config}"
 export KUBECONFIG="${PIN_KUBECONFIG}"
 
+# ---------------------------------------------------------------- RETRACTION GATES
+#
+# TWO gates, deliberately separate, because they say different things.
+#
+# WHY THIS EXISTS AT ALL. Until now this script's skip list was a COMMENT at the top --
+# "It SKIPS 0.66.0, 0.53.0 and 0.54.0". Nothing evaluated it. `OASGEN_VERSION=0.66.0
+# ./scripts/pin_verify.sh` would have installed a version we had measured as broken and
+# documented as skipped, because prose is not a control. oasgen's own
+# retracted-versions.yaml header makes exactly this point about release notes: "nothing
+# evaluates it, and the only thing between a cluster and a bad version is a human reading
+# prose at the moment of pinning." We had the same defect one layer down.
+#
+# GATE 1 -- THE PRODUCER'S LIST, fetched at run time from oasgen's repo. It covers
+# 0.83.0, 0.77.0, 0.70.0, 0.69.0, 0.66.0 today, and whatever it covers tomorrow without
+# anyone here being told. Walking up from this pin, a hand-kept list would have sailed
+# through 0.69.0, 0.70.0 and 0.77.0 -- all three published, all three installing cleanly,
+# which is the dangerous kind: a version that does not exist fails loudly at fetch.
+# It FAILS CLOSED. "Could not read the list" is not evidence a version is safe.
+#
+# GATE 2 -- THIS REPO'S OWN SKIPS, which are NOT upstream policy and must not read as it.
+# 0.53.0 is here rather than in oasgen's list by their decision and ours: 238 of its 240
+# stamped paths are inert, and the harm needs a corpus carrying a semantically loaded
+# default under an optional object, so retracting it for everyone would push consumers off
+# a version that cannot hurt them. 0.54.0 was accepted upstream (oasgen#831) and therefore
+# comes from gate 1 now -- it is NOT repeated here, so there is exactly one source of
+# truth per version.
+# A case, not an indirect variable: `eval "reason=\${LOCAL_SKIP_REASON_${v//./_}}"` works
+# and is unreadable, and shellcheck cannot see the use so it warns the reasons are dead.
+# The reason belongs beside the version it explains.
+case "$PIN" in
+  0.53.0)
+    die "0.53.0 is on THIS REPO'S local skip list, not oasgen's.
+    It stamps \`default: {}\` on 240 optional object paths. 238 are inert; the one that is
+    not makes a Vpc submitted with a partial spec.properties claim the region-unique
+    default role it never asked for, and the vendor then rejects a LATER, innocent Vpc
+    with 'Only one default vpc for region is admissible'.
+    oasgen declined to retract it for everyone, and that was the right call: the harm
+    needs a corpus carrying a semantically loaded default under an optional object.
+    Use 0.54.1." ;;
+  0.54.0)
+    die "0.54.0 is retracted UPSTREAM (oasgen#831) and also refused here, as a
+    belt-and-braces duplicate until a run confirms the producer gate below catches it.
+    Its RBAC collector missed apiKey.tokenRef, which is 25 of our 36 kinds, so the
+    generated controller comes up, stays up, and nothing ever reconciles -- and the
+    denial names a Secret a human can read with kubectl, so it reads as a bad credential
+    when the Role is at fault.
+    Use 0.54.1." ;;
+esac
+
+say "retraction gate: asking oasgen whether ${PIN} is retracted"
+python3 -I "$(dirname "$0")/check_retracted.py" "$PIN"
+retracted_rc=$?
+case "$retracted_rc" in
+  0) ;;
+  1) die "${PIN} is RETRACTED by its producer (see the reason and replacement above).
+    Pin the version its entry names under \`use:\` instead. There is no override: a
+    retraction is the producer saying this version damages consumers, and a flag to
+    ignore it would make the gate decoration." ;;
+  2) die "could not determine whether ${PIN} is retracted (see above), so this run
+    REFUSES to continue. Failing closed is the whole point: a network error is not
+    evidence that a version is safe. Retry when the list is reachable." ;;
+  *) die "check_retracted.py exited ${retracted_rc}, which it is not documented to do" ;;
+esac
+
 # The three cluster operations, one implementation per provider. Everything below speaks
 # only in terms of ${CTX}, so adding a provider means adding a case here and nothing else.
 # HOST LOAD GATE. Diego's decision on 2026-11-12, relayed to every session: do not start

@@ -169,11 +169,23 @@ try:
     d = json.load(sys.stdin)
 except Exception as e:
     sys.exit("could not parse the /projects response as JSON: %s" % e)
-items = d.get("value") if isinstance(d, dict) else d
-if items is None and isinstance(d, dict):
-    items = d.get("items") or d.get("data")
+# Aruba answers {"total": N, "values": [...]}. MEASURED against the live API, not
+# guessed: the first version of this looked for value/items/data and failed on the
+# plural -- `values`, not `value`. The alternatives stay as fallbacks, and the error
+# below names every key tried plus the keys actually present, because "no list of
+# projects" without the real keys sent me back to the cluster for a second look.
+items = None
+if isinstance(d, list):
+    items = d
+elif isinstance(d, dict):
+    for key in ("values", "value", "items", "data"):
+        if isinstance(d.get(key), list):
+            items = d[key]
+            break
 if not isinstance(items, list):
-    sys.exit("the /projects response has no list of projects at value/items/data")
+    sys.exit("the /projects response carries no project list. Tried values/value/"
+             "items/data; the keys actually present are: %s"
+             % (sorted(d.keys()) if isinstance(d, dict) else type(d).__name__))
 out = []
 for it in items:
     md = (it or {}).get("metadata") or {}
