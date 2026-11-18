@@ -13,6 +13,16 @@ than inferred from the CRs disappearing.
 
 Usage:
     scripts/ga_chain.py tests/ga/chains/schedule.yaml [--with-billable] [--keep]
+                        [--existing]
+
+--existing OBSERVES CRs AN EARLIER RUN LEFT BEHIND instead of creating them. It exists
+for the in-place upgrade axis: install stack A, run the chain with --keep, upgrade the
+stack to B, then re-run with --existing. The CRs are then the ones stored under A's
+schema and reconciled by B's controllers, which is the only way to measure an upgrade
+rather than a fresh install. Every resource must already be present -- a missing one is
+a hard failure, because creating it here would measure a fresh CR and report it as a
+survivor. Nothing is applied, so the spec under measurement is not rewritten; the
+observe, drift and delete phases run unchanged.
 
 Chain format:
 
@@ -105,7 +115,16 @@ def token(force=False):
     if r.returncode == 0 and r.stdout.strip():
         _TOKEN = base64.b64decode(r.stdout).decode()
         return _TOKEN
-    raise SystemExit(f"no token in {TOKEN_SECRET_NS}/{TOKEN_SECRET}")
+    # The kubectl stderr goes in the message. Without it this said "no token in
+    # default/arubacloud-token" when the real cause was `--context kind-aruba-ga does not
+    # exist` -- a message about the credential for a failure about the cluster, which cost
+    # a measurement on the upgrade axis. KUBE_CONTEXT defaults to a kind context, so any
+    # caller against a different cluster that forgets to set it lands here.
+    raise SystemExit(
+        f"no token in {TOKEN_SECRET_NS}/{TOKEN_SECRET} via context '{CONTEXT}'"
+        + (f": {r.stderr.strip()[:200]}" if r.stderr.strip() else
+           " (the Secret read returned nothing; KUBE_CONTEXT is "
+           f"'{CONTEXT}' -- is that the cluster you meant?)"))
 
 
 # Attempt census, so a transport-failure count has a denominator.
@@ -1007,7 +1026,21 @@ def main():
             # would make the first attempt fail for a reason that looks like the API
             # rejecting the value.
             sec = res.get("secret")
-            if sec:
+            if sec and "--existing" in flags:
+                # The Secret was placed by the run that created these CRs and left in
+                # place by --keep. Re-creating it would need the credential in THIS
+                # shell, which the upgrade step has no reason to hold; and its absence
+                # must fail loudly, because a resolver whose Secret vanished fails in a
+                # way that looks like the upgrade broke the controller.
+                sname = expand(sec["name"], variables, ids, kind)
+                chk = kubectl("get", "secret", sname, "-n", NS, "-o", "name")
+                if chk.returncode != 0:
+                    raise RuntimeError(
+                        f"--existing: Secret/{sname} for {kind}/{name} is gone, so this "
+                        f"run cannot distinguish an upgrade defect from a missing "
+                        f"credential")
+                print(f"--- Secret/{sname} still present for {kind}/{name}")
+            elif sec:
                 sname = expand(sec["name"], variables, ids, kind)
                 skey = expand(sec["key"], variables, ids, kind)
                 svalue = expand(sec["value"], variables, ids, kind)
@@ -1023,15 +1056,35 @@ def main():
                     raise RuntimeError(f"secret apply failed: {r.stderr.strip()[:200]}")
 
             adopt_state = None
-            if res.get("adopt"):
-                adopt_state = adopt_precreate(res, variables, ids, kind, name)
-
-            print(f"--- creating {kind}/{name}")
-            r = kubectl("apply", "-f", "-", stdin=yaml.safe_dump(manifest))
-            if r.returncode != 0:
-                print(f"    apply failed: {r.stderr.strip()[:300]}", file=sys.stderr)
-                raise RuntimeError("apply failed")
-            created.append((kind, name))          # registered BEFORE waiting
+            if "--existing" in flags:
+                # NOT an apply. An apply would rewrite the spec and reset the very
+                # state being measured -- the CR as a previous stack stored it.
+                if res.get("adopt"):
+                    print(f"--- SKIP adopt pre-create for {kind}/{name}: --existing "
+                          f"measures a CR that is already adopted")
+                g = kubectl("get", kind, name, "-n", NS, "-o", "json")
+                if g.returncode != 0:
+                    raise RuntimeError(
+                        f"--existing: {kind}/{name} is not present. This mode measures "
+                        f"CRs an EARLIER run left behind; creating one here would "
+                        f"measure a fresh CR and report it as a survivor.")
+                live = json.loads(g.stdout)
+                lmd = live.get("metadata", {})
+                print(f"--- observing existing {kind}/{name} "
+                      f"(uid={str(lmd.get('uid'))[:8]}, "
+                      f"rv={lmd.get('resourceVersion')}, gen={lmd.get('generation')})")
+            else:
+                if res.get("adopt"):
+                    adopt_state = adopt_precreate(res, variables, ids, kind, name)
+                print(f"--- creating {kind}/{name}")
+                r = kubectl("apply", "-f", "-", stdin=yaml.safe_dump(manifest))
+                if r.returncode != 0:
+                    print(f"    apply failed: {r.stderr.strip()[:300]}", file=sys.stderr)
+                    raise RuntimeError("apply failed")
+            # Registered BEFORE waiting, and under --existing too: the delete half of
+            # the axis is the point. These CRs outlived their creating run and the
+            # teardown must still prove they go away upstream.
+            created.append((kind, name))
 
             if not wait_ready(kind, name):
                 raise RuntimeError(f"{kind}/{name} never became Ready")
@@ -1073,7 +1126,8 @@ def main():
                     if res.get("driftBody") is not None else None,
                     drift_assert=res.get("driftAssert"))
 
-        print(f"\nRESULT: {len(created)} resources created and observed")
+        verb = "observed (pre-existing)" if "--existing" in flags else "created and observed"
+        print(f"\nRESULT: {len(created)} resources {verb}")
         for k, v in drift_results.items():
             print(f"  drift {k}: {'ok' if v else ('SKIPPED' if v is None else 'FAILED')}")
         # NOT `return`: the teardown in the finally below computes its own
