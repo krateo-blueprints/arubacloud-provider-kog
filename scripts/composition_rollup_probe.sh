@@ -297,11 +297,27 @@ say "packaging ${CHART_DIR} with a content-addressed version"
 CONTENT_SHA="$(find "$CHART_DIR" -type f ! -name '*.tgz' -print0 \
   | LC_ALL=C sort -z \
   | xargs -0 shasum -a 256 \
-  | shasum -a 256 | cut -c1-12)"
+  | shasum -a 256 | cut -c1-8)"
 [ -n "$CONTENT_SHA" ] || die "could not digest the chart directory"
-PROBE_VERSION="0.0.0-probe-${CONTENT_SHA}"
+# `0.0.0-p<8 hex>` = 15 bytes, and the shape is forced from both ends.
+#
+# CEILING: CompositionDefinition's CRD caps spec.chart.version at 20 BYTES. The first
+# version of this used `0.0.0-probe-<12 hex>` (24 bytes) and the apiserver refused it --
+# "Too long: may not be more than 20 bytes" -- after the chart had already been packaged
+# and served. 20 bytes is tight for a semver carrying any prerelease tag at all.
+#
+# FLOOR: the `p` prefix is load-bearing. A bare hex digest can be all digits, and a
+# numeric semver prerelease identifier may not have a leading zero, so `0.0.0-0123abc`
+# would be fine while `0.0.0-01234567` would not -- an invalid chart version roughly one
+# time in sixteen, which is the kind of flake nobody diagnoses.
+PROBE_VERSION="0.0.0-p${CONTENT_SHA}"
+if [ "${#PROBE_VERSION}" -gt 20 ]; then
+  die "the computed chart version ${PROBE_VERSION} is ${#PROBE_VERSION} bytes and
+CompositionDefinition caps spec.chart.version at 20. Shorten the digest rather than the
+prefix: the prefix keeps the prerelease identifier non-numeric."
+fi
 note "chart content digest ${CONTENT_SHA}"
-note "version ${PROBE_VERSION}"
+note "version ${PROBE_VERSION} (${#PROBE_VERSION} bytes, cap is 20)"
 helm package "$CHART_DIR" --version "$PROBE_VERSION" --app-version "$PROBE_VERSION" \
   --destination "$WORK" >/dev/null || die "helm package failed"
 TGZ="${CHART_NAME}-${PROBE_VERSION}.tgz"
