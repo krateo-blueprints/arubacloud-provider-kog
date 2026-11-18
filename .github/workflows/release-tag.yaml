@@ -157,7 +157,7 @@ jobs:
         # helm on the runner, which `Install Helm` above provides, and push.sh reads the
         # manifest back using the same credentials, which is why the env below is on the
         # pushing step.
-        uses: krateo-platformops/.github/.github/actions/chart-push@5f126b7d93ec5302eb9cc57a3af157550175fbaf # main 2026-11-18
+        uses: krateo-platformops/.github/.github/actions/chart-push@653ac1e67d761584993a774c76963514968b3650 # main 2026-11-18
 
       - name: Package and push every chart
         env:
