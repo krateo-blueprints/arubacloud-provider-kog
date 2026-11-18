@@ -141,7 +141,8 @@ apart.
 ### The chart-push pin must stay at or after the argv fix
 
 `release-tag.yaml` pins
-`krateo-platformops/.github/.github/actions/chart-push@653ac1e67d761584993a774c76963514968b3650`.
+`krateo-platformops/.github/.github/actions/chart-push@e1d3e99215e80ae56eca4a67e9e061b2c73168b8`
+(tag 1.0.0, byte-identical to `653ac1e6` where the fix landed — verified with `cmp`, not only by hash).
 **Do not move it backwards.** Commit `5f126b7d`, pinned here briefly on 2026-11-18, put the
 registry credential on curl's command line — `-u user:pass` and
 `-H "Authorization: Bearer ..."` — so both sat in process argv, readable by any other
