@@ -272,14 +272,6 @@ case "$PIN" in
     oasgen declined to retract it for everyone, and that was the right call: the harm
     needs a corpus carrying a semantically loaded default under an optional object.
     Use 0.54.1." ;;
-  0.54.0)
-    die "0.54.0 is retracted UPSTREAM (oasgen#831) and also refused here, as a
-    belt-and-braces duplicate until a run confirms the producer gate below catches it.
-    Its RBAC collector missed apiKey.tokenRef, which is 25 of our 36 kinds, so the
-    generated controller comes up, stays up, and nothing ever reconciles -- and the
-    denial names a Secret a human can read with kubectl, so it reads as a bad credential
-    when the Role is at fault.
-    Use 0.54.1." ;;
 esac
 
 say "retraction gate: asking oasgen whether ${PIN} is retracted"
