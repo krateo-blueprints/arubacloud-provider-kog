@@ -34,7 +34,7 @@ env:
   # `profile` is in the provider list, so a pin below 0.36.0 ships an AiKey that is
   # wrong or absent. See scripts/providers.py.
   #
-  # CURRENT PIN: 0.67.0   <- must equal OASGEN_VERSION below; validate.py enforces it
+  # CURRENT PIN: 0.84.0   <- must equal OASGEN_VERSION below; validate.py enforces it
   #
   # THE 0.52.0 STEP (historical -- this block said "THE PIN, 0.52.0" until 2026-11-18,
   # which was true when written and false for the fifteen releases after the pin moved):
@@ -59,7 +59,7 @@ env:
   #   0.26.1  #166  credential headers redacted in logs
   #   0.28.0  #178  raises the chart floor to Kubernetes 1.36, which forces the node
   #                 image up in the same breath -- taken on purpose, see node_image
-  OASGEN_VERSION: "0.67.0"
+  OASGEN_VERSION: "0.84.0"
 
 jobs:
   validate:

@@ -81,16 +81,42 @@ expensive, and it needs no change to the RestDefinition.
 > wrong name. It is marked Deprecated upstream in provider-runtime#111, pointing at the
 > `Should*` predicates, and the same point has been relayed for unstructured-runtime's copy.
 >
-> **What is still NOT established for this repository, stated so nobody reads the above as
-> coverage:** whether a given oasgen-provider release's `rest-dynamic-controller` image
-> carries a runtime at v1.28.0 or later. The runtime version cannot be read from the RDC
-> source repositories. `krateo-platformops/rest-dynamic-controller` is archived (last push
-> 2026-08-07), and the repository of the same name under the **unhyphenated** org — the dead
-> one `lint-docs` bans by name, one hyphen away from the live org — was last pushed
-> 2026-06-17. The image running here was published today, so neither repository is its
-> source and neither can be read for its runtime pin. So for the pin, **the gate's presence is
-> a question to answer on a cluster**, by annotating a CR and observing whether the action is
-> withheld, not by reading a dependency graph.
+> **ANSWERED, hours later and not by me (2026-11-18).** This paragraph said the runtime
+> version behind a given release "cannot be read from the RDC source repositories" and was
+> therefore "a question to answer on a cluster". Both halves were wrong, and the answer
+> matters because **0.84.0 is now this repository's pin**:
+>
+> ```
+> rest-dynamic-controller:0.84.0  ->  unstructured-runtime v1.27.1
+> ```
+>
+> **So the create/update gate is NOT live at our pin.** Only the delete decision is
+> honoured, exactly as the correction above describes for v1.27.1. A reader who sets
+> `krateo.io/management-policy: observe` on a managed CR here will still get creates and
+> updates.
+>
+> Measured by core-provider, by pulling the linux/amd64 image, copying the entrypoint
+> `/bin/controller` out **without running it**, and reading `go version -m`:
+> `dep github.com/krateo-platformops/unstructured-runtime v1.27.1`. The source agrees —
+> `go/rest-dynamic-controller/go.mod` at oasgen-provider tag 0.84.0 (`de67f82`) pins
+> v1.27.1.
+>
+> **And the source IS readable; I was looking in dead repositories.** The live source is the
+> monorepo `krateo-platformops/oasgen-provider` under `go/rest-dynamic-controller/`. The
+> standalone repository of that name has been frozen since the monorepo fold (2026-08-07),
+> and the one under the unhyphenated org — which `lint-docs` bans by name, one hyphen from
+> the live org — is a separate upstream. My conclusion "neither repository is its source"
+> was true of the two I knew about and became a claim about all of them.
+>
+> **Two boundaries to watch, and they are different per surface:**
+>
+> | surface | gate live from | measured by |
+> |---|---|---|
+> | REST resources (this repo's 36 kinds) | an oasgen release whose RDC carries **v1.28.1** — not yet published | pending |
+> | compositions (core-provider's cdc) | **core-provider 2.13.115** (2.13.114 carries v1.27.1) | `go version -m` on the cdc image |
+>
+> `scripts/composition_rollup_probe.sh` pins 2.13.114, so the probe's own runs are on the
+> pre-gate runtime.
 >
 > The unknown-value case is **decision D2** in epic #110 — "invalid acts on nothing, plus a
 > named reason" — still open and awaiting the user's decision, so **no release turns a typo

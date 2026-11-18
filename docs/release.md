@@ -130,7 +130,7 @@ patched OAS, every `requestFieldMapping.inPath` against the path parameters, eve
 ## Compatibility
 
 These manifests require **oasgen-provider >= 0.36.0**. That is the FLOOR, not the pin:
-the pin is **0.67.0** and is what CI validates (see [Usage](usage.md#prerequisites)). The
+the pin is **0.84.0** and is what CI validates (see [Usage](usage.md#prerequisites)). The
 two were the same number when this section was written and have not been since; keeping
 them distinct matters because the floor explains what cannot be lowered, while the pin is
 what the evidence was gathered on. It is no longer a fork:
@@ -206,14 +206,14 @@ deliberately declined to retract for everyone.
   otherwise verify one version while `pin_verify.sh` verified another, and the run that
   says "the pin is good" would not be about the pin CI uses.
 
-#### Known obstacles between 0.67.0 and oasgen's newest
+#### Known obstacles between 0.67.0 and 0.84.0 — the path this pin has now taken
 
 **One thing the bump does NOT change: the Kubernetes floor.** Read from the published
 charts rather than inferred, across the whole path including every version the bump would
 pass through:
 
 ```
-0.67.0  kubeVersion: '>=1.36.0-0'      <- the current pin
+0.67.0  kubeVersion: '>=1.36.0-0'      <- the FORMER pin
 0.68.0  kubeVersion: '>=1.36.0-0'
 0.73.0  kubeVersion: '>=1.36.0-0'
 0.76.0  kubeVersion: '>=1.36.0-0'
@@ -239,8 +239,8 @@ Live as of 2026-11-18; the measurements are in
 | 0.77.0 | retracted: a create whose outcome is unknown stays `Ready=False/Creating` instead of reaching `CreateOutcomeUnknown`. Scoped to findby-addressed kinds, which is **36 of 36** here — our maximum-exposure case |
 | 0.83.0 | tagged and never published. Fails at fetch, so it enforces itself |
 | below 0.76.0 | a floor **if `partialFields` is ever adopted**: below it the CRD does not declare the field, Kubernetes prunes it, and an update then sends each map WHOLE. 0 of 36 declare it today, so there is no instance — by luck, not design |
-| **0.75.0 through 0.83.1** | oasgen#818: a create answering **404** stamps `krateo.io/external-create-pending` and nothing clears it. **Corrected 2026-11-18 — this row said "0.80.0 and above", which was too narrow by five releases and wrong in the reassuring direction.** The defect is in `unstructured-runtime`, not in rest-dynamic-controller, which is why reading the RDC at two tags cannot find it: `meta.SetExternalCreateFailed` is **unconditional** through v1.21.1 (so a 404 clears the stamp) and from **v1.22.0** is guarded by `if createCommittedNot(actionErr) || !created.Requested`, which a 404 satisfies neither of — it is not in `createRefusedWithoutCreating` (400/422, +401 later) and `created.Requested` is true because the create was attempted. oasgen 0.74.0 ships v1.21.1; 0.75.0 ships v1.22.0. **Our 0.67.0 pin ships v1.17.1 and is CLEAN** — verified from the module cache, not inferred. Exposure is a FRESH install, which is what a bump-verification cluster is. Fixed in 0.84.0 (#825) |
-| a release carrying oasgen#837 | **retires six statements in this repo, and not before.** `configurationFields` becomes mutable there. It is still `self == oldSelf` at 0.83.1 — measured from the served schema, not inferred — so the claims below are CORRECT today and must not be edited until the pin passes that release: `docs/troubleshooting.md:79`, `docs/adding-a-resource.md:122`, `docs/live-cluster-test.md:2360`, `docs/oasgen-provider-evolution.md:128` and `:658`, `scripts/pin_verify.sh:91`. `identifiers` stays immutable deliberately — adding one makes matching stricter and can orphan a live CR, removing one makes it looser, which is oasgen#444's measured case where a CR adopted another object, reported `Synced=True` and deleted it: no safe direction, unlike its two siblings which each have one |
+| **0.75.0 through 0.83.1** | oasgen#818: a create answering **404** stamps `krateo.io/external-create-pending` and nothing clears it. **Corrected 2026-11-18 — this row said "0.80.0 and above", which was too narrow by five releases and wrong in the reassuring direction.** The defect is in `unstructured-runtime`, not in rest-dynamic-controller, which is why reading the RDC at two tags cannot find it: `meta.SetExternalCreateFailed` is **unconditional** through v1.21.1 (so a 404 clears the stamp) and from **v1.22.0** is guarded by `if createCommittedNot(actionErr) || !created.Requested`, which a 404 satisfies neither of — it is not in `createRefusedWithoutCreating` (400/422, +401 later) and `created.Requested` is true because the create was attempted. oasgen 0.74.0 ships v1.21.1; 0.75.0 ships v1.22.0. **Our 0.67.0 pin ships v1.17.1 and is CLEAN** — verified from the module cache, not inferred. Exposure is a FRESH install, which is what a bump-verification cluster is. Fixed in 0.84.0 (#825) **AND THE PIN IS NOW PAST IT: 0.84.0 carries #825, the fix.** So this row is history rather than a live constraint, and it is the single best reason the pin moved off 0.67.0 at all — 0.67.0 was clean only because it predated the defect, which is luck, not coverage. The detector (`scripts/create_pending_latch_check.py`) is kept and its predicate is now exercised by fixtures in CI |
+| ~~a release carrying oasgen#837~~ **0.84.0, now the pin** | **Condition met 2026-11-18; the six statements are retired.** `configurationFields` carries NO validations on the served CRD at 0.84.0 — measured field by field from the CRD the cluster served, with `spec.resource`'s ten rules as the positive control, not inferred from #837's changelog. The six sites are rewritten rather than deleted: `docs/troubleshooting.md` (now a table), `docs/adding-a-resource.md`, `docs/live-cluster-test.md`, `docs/oasgen-provider-evolution.md` (the D2 row and the D2 section), `scripts/pin_verify.sh` (whose directory-vs-overlay rationale rested on the rule and now rests on a property that does not). **Two of the six were wrong in a second way nobody had noticed:** `additionalStatusFields` and `includedSpecFields` are **append-only** (`size(self) >= size(oldSelf) && oldSelf.all(i, v, self[i] == v)`), never immutable. `identifiers`, `resourceGroup` and `resource.kind` remain `self == oldSelf`. `identifiers` stays that way deliberately: adding one orphans a live CR, removing one is oasgen#444's measured case where a CR adopted another object, reported `Synced=True` and deleted it — no safe direction |
 
 **The Kubernetes floor is 1.36.** Measured from the published charts rather than
 inferred, re-measured 2026-11-13 across the whole range the pin has travelled:
@@ -256,12 +256,22 @@ inferred, re-measured 2026-11-13 across the whole range the pin has travelled:
 | 0.64.0 (a former pin) | `>=1.36.0-0` |
 | 0.65.0 (a former pin) | `>=1.36.0-0` |
 | 0.66.0 (**skipped**, see below) | `>=1.36.0-0` |
-| **0.67.0 (the pin)** | `>=1.36.0-0` |
+| 0.67.0 (a former pin) | `>=1.36.0-0` |
+| **0.84.0 (the pin)** | `>=1.36.0-0` |
 
-So the floor has not moved since 0.34.0, and the pin reaching 0.67.0 costs nothing further
-in cluster version. The chart's `appVersion` at 0.67.0 is also `0.67.0` (re-measured 2026-11-14 from
-the published chart, as is every row above), which is what ties the rest-dynamic-controller image tag
-to the chart rather than letting the two drift.
+So the floor has not moved since 0.34.0, and the pin reaching **0.84.0** costs nothing
+further in cluster version — read from the published chart on 2026-11-18, not inferred:
+
+```
+$ helm show chart oci://ghcr.io/krateo-platformops/charts/oasgen-provider --version 0.84.0
+appVersion: 0.84.0
+kubeVersion: '>=1.36.0-0'
+version: 0.84.0
+```
+
+The `appVersion` matching the chart version is what ties the rest-dynamic-controller image
+tag to the chart rather than letting the two drift, and it was confirmed on the cluster:
+the deployments ran `rest-dynamic-controller:0.84.0` beside `oasgen-provider:0.84.0`.
 
 ### What a provider UPGRADE does to 36 CRDs, which a fresh-cluster harness cannot see
 
@@ -273,6 +283,18 @@ new controller image. And it suppresses only that one clause — a `spec.resourc
 `resourceHash`, a separate clause of the same OR, and regenerates regardless of the knob.
 The mechanism was reported by the openstack-ironic-operator-kog session, which hit it on 7
 definitions; the 36-apply figure is ours.
+
+**MEASURED 2026-11-18 on the 0.67.0 → 0.84.0 in-place upgrade, on FOUR definitions, not 36.**
+See the in-place upgrade axis appendix in
+[oasgen-provider-evolution.md](oasgen-provider-evolution.md). `status.generatorBuild` moved
+on all four (`0.67.0-f0fd1bf6…` → `0.84.0-de67f828…`), so the re-render demonstrably fired —
+and **all eight CRD schemas hashed identical across it**, so for these kinds the burst was a
+byte-identical no-op apply. That is the mechanism confirmed and its blast radius measured as
+*zero schema change*, which are two different findings and neither implies the other.
+
+Scope, stated because this section's own figure is 36: the run installed
+`RESTDEFS_SCOPE=chain`, so **4 of 36**. The 36-apply burst remains a calculation, not an
+observation, and `OASGEN_PROVIDER_REGENERATE_ON_UPGRADE=false` was **not** exercised.
 
 **A fresh-cluster-per-run harness measures a clean install and says nothing about this path.**
 The specific risk it cannot see: a regeneration that unserves a CRD version something still pins.

@@ -2357,8 +2357,11 @@ two of four succeeding is flakiness, not an entitlement boundary.
 Checked against the controller source rather than assumed:
 
 - `AdditionalStatusFields` carries a CEL rule making it **append-only** — new entries
-  at the end are explicitly allowed, unlike `configurationFields`, which is immutable
-  once the CRD exists.
+  at the end are explicitly allowed. This note originally contrasted it with
+  `configurationFields`, "which is immutable once the CRD exists": that was true at the
+  0.67.0 pin and is **no longer true at 0.84.0**, where `configurationFields` carries no
+  validation at all (oasgen#837). The fields that are still immutable are
+  `resourceGroup`, `resource.kind` and `identifiers`.
 - `populateStatusFields` skips a path it cannot find (`if err != nil || !found {
   continue }`), so adding it costs nothing on the resources that never fail.
 - **No OAS change is needed** — the field is already declared. The destination path

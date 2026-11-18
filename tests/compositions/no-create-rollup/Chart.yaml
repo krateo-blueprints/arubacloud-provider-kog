@@ -4,7 +4,8 @@ apiVersion: v2
 # This chart exists to answer one question core-provider asked and nothing else:
 # does the reason rest-dynamic-controller writes on a child with NO create verb
 # reach composition-dynamic-controller's rollup and fail the PARENT, naming that
-# child? At the 0.67.0 pin LoadBalancer settles at
+# child? MEASURED AT THE 0.67.0 PIN -- and NOT re-measured since the pin moved to
+# 0.84.0, so quote it with its version -- LoadBalancer settles at
 # Ready=False/NoCreateVerbDeclared, and cdc >= 2.13.96 (#496) maps that reason to
 # childFailed -- but the two halves had only ever been measured separately. The
 # parent's condition had never been observed, and docs/oasgen-provider-evolution.md

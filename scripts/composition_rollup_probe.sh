@@ -24,12 +24,28 @@
 # This script attaches to the cluster that left behind, and REFUSES rather than building
 # one, so a missing stack can never be reported as a composition failure.
 #
-# THE PIN IS DELIBERATE. It runs at whatever oasgen pin pin_verify installed -- 0.67.0 at
-# the time of writing -- NOT at oasgen's newest (0.83.1). core-provider's two childFailed
-# halves were measured at 0.67.0, and oasgen stated plainly that whether the PRODUCER still
-# fires NoCreateVerbDeclared at 0.83.1 is theirs to confirm and not something a reason
-# string declared at head proves. Running at 0.83.1 would put two unknowns into one
-# measurement. The 16-release bump is its own exercise with its own cluster.
+# THE PIN IS DELIBERATE. It runs at whatever oasgen pin pin_verify installed, and it
+# follows the pin rather than naming a version, so this comment does not go stale when the
+# pin moves.
+#
+# WHAT THE PIN MOVE TO 0.84.0 DID TO THE EARLIER RESULT, said here because the result is
+# cited elsewhere as though it described the pinned version. The probe ran once, and it ran
+# at 0.67.0 with core-provider 2.13.114: parent Ready=False/Unavailable naming
+# `managed children not healthy: loadbalancers/krateo-system/probe-lb`, 4 managed / 2
+# evaluated / 2 noReadyCondition. THAT MEASUREMENT IS NOW HISTORY, not a statement about
+# the pin:
+#
+#   * oasgen 0.67.0 emitted NoCreateVerbDeclared. Whether 0.84.0's PRODUCER still emits it
+#     is oasgen's to confirm and is NOT proved by a reason string declared at head -- the
+#     original reasoning here, unchanged and still correct.
+#   * the CONSUMER half moved too: core-provider 2.13.115 is the first cdc image embedding
+#     unstructured-runtime v1.28.1, where the management-policy create/update gate is live;
+#     2.13.114, which this probe pins, carries v1.27.1. Measured by core-provider from the
+#     image with `go version -m`, not inferred from a changelog.
+#
+# So a re-run at the 0.84.0 pin is its own exercise with its own cluster, and until it
+# happens the 0.67.0 reading must be quoted WITH its version rather than as "the probe
+# result".
 set -euo pipefail
 
 say()  { printf '\n=== %s ===\n' "$*"; }

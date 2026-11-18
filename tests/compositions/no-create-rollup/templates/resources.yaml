@@ -2,7 +2,8 @@
   The two children, chosen to make the parent's message discriminating.
 
   LoadBalancer: declares findby + get and NO create -- the generator prints this
-  from the OAS, it is not a claim typed here. At the 0.67.0 pin it settles at
+  from the OAS, it is not a claim typed here. MEASURED AT THE 0.67.0 PIN (the pin when
+  this chart was written; not re-measured at 0.84.0) it settles at
   Ready=False/Synced=False both carrying NoCreateVerbDeclared, with
   krateo.io/external-create-succeeded ABSENT, no CreatedExternalResource event,
   and the vendor's loadBalancers collection unchanged at 0.
