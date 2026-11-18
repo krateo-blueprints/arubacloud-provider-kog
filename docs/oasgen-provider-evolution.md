@@ -2140,3 +2140,84 @@ transport   19 attempts / 18 ok / 0 transport failures / 1 HTTP error
 artifacts   chart, crds chart and both images verified here before the run, with a negative
             control (a chart that must not exist at 0.67.0 does not)
 ```
+
+## Appendix — the shape axis at 0.83.1, offline (2026-11-18)
+
+**The pin is 16 releases behind, not one.** 0.67.0 was pinned while waiting for oasgen#676
+to land "alone"; it had in fact shipped in **0.68.0**, and the issue stayed open until
+2026-11-18 08:33Z. oasgen's newest tag is **0.83.1**. This is the **first of three axes**
+for that bump, and the only one that needs no cluster.
+
+> **This appendix measures SHAPE ONLY.** Reconcile and in-place upgrade are NOT measured
+> here, and nothing below licenses moving the pin on its own. What it establishes is that
+> the CRDs this repo generates do not change between the two tags — which is the axis that
+> would have caught 0.53.0's `default: {}` stamping, and the one whose regressions reach
+> users through generated CRDs rather than through a controller log.
+
+Rendered offline, in a detached worktree per tag, by copying
+`tests/probes/fleet_parentdefault_probe_test.go` into each tag's
+`internal/tools/render/` and running it against this repo's committed definitions. No
+cluster, no vendor API.
+
+```
+                                              0.67.0      0.83.1
+definitions rendered                              36          36
+render failures                                    0           0
+documents parsed (configmaps/)                    12          12
+stamped `default: {}` paths                        0           0
+CONTROL stamped paths, suppression flag UNSET      1           1   <- the zero is a real zero
+blast radius (eligible parents if unsuppressed)    2           2
+warning: identifier absent from findby items      18          18
+auth shape                               36 OK, 0 failures   36 OK, 0 failures
+                                         25 apiKey / 11 bearer   25 apiKey / 11 bearer
+```
+
+**Every one of the 51 reported assertion lines is byte-identical between the two tags**
+(`diff` over the extracted lines, not an eyeball comparison of the summary figures).
+
+Two things make the identical result worth something rather than merely reassuring:
+
+* **The detector control fires.** With `NoParentDefaults` unset the probe finds 1 stamped
+  path at both tags, so "0 stamped" is a measurement and not an instrument that cannot
+  report a one. A zero from a detector never shown to detect a one is the recurring mistake
+  this file keeps logging.
+* **The auth-shape split is corroborated independently.** The render reports 25 `apiKey` and
+  11 `bearer` kinds; a separate Python census over `openapi/*.json`, written from the OAS
+  rather than from oasgen's code, reports the same 25/11 (8 documents `apiKey`, 5
+  `http/bearer`, 0 `oauth2`). Two instruments, one answer.
+
+**Provenance of the code that did the rendering**, because getting this wrong would have
+produced a confident result from the wrong source:
+
+```
+clone     ~/krateo/krateo-oasgen-provider   origin https://github.com/krateo-platformops/oasgen-provider.git
+          (two other local clones exist: one stale on the same org, one a personal fork
+           at github.com/braghettos/oasgen-provider -- see the hyphen trap below)
+tag SHAs  verified against `git ls-remote` rather than trusted locally:
+            0.67.0 -> f0fd1bf698ea   MATCH
+            0.83.1 -> 8743a645542b   MATCH
+```
+
+The org hyphen matters: `krateo-platformops` carries these tags and `krateoplatformops`
+has a same-named, non-archived repo with none of them. Earlier the same day, querying the
+wrong source returned "no such version" for **0.67.0 itself** — the version running in
+production — which is the only reason the instrument was suspected instead of the claim.
+
+### What still has to be measured before the pin moves
+
+* **reconcile** — released images on a disposable cluster, through the controller.
+* **in-place upgrade** — 0.67.0 → 0.83.1 on a live cluster with CRs already present.
+* **the path is not walkable in one step.** Four versions between here and 0.83.1 must be
+  excluded, and `scripts/pin_verify.sh` now refuses them rather than documenting them (see
+  `scripts/check_retracted.py`): **0.69.0** and **0.70.0** (duplicate on a status-write
+  race), **0.77.0** (a create whose outcome is unknown stays `Ready=False/Creating`, and
+  this corpus is the maximum-exposure case at 36 of 36 findby-addressed kinds), and
+  **0.83.0** (tagged and never published — it fails at fetch and so enforces itself).
+* **a floor appears if `partialFields` is ever adopted**: below **0.76.0** the
+  RestDefinition CRD does not declare it, Kubernetes prunes it, and an update then sends
+  each map WHOLE. Measured here: 0 of 36 definitions declare it today (control: 33 of 36
+  declare `additionalStatusFields`), so there is no instance — by luck, not design.
+* **#818, present from 0.80.0**: a create answering 404 stamps
+  `krateo.io/external-create-pending` and it never clears. Its exposure is a FRESH install,
+  which is exactly what a bump-verification cluster is, so it will bite the measurement
+  rather than steady state. Fixed only on oasgen's unreleased main (#825).
