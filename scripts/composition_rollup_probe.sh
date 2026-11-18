@@ -38,10 +38,17 @@
 #   * oasgen 0.67.0 emitted NoCreateVerbDeclared. Whether 0.84.0's PRODUCER still emits it
 #     is oasgen's to confirm and is NOT proved by a reason string declared at head -- the
 #     original reasoning here, unchanged and still correct.
-#   * the CONSUMER half moved too: core-provider 2.13.115 is the first cdc image embedding
-#     unstructured-runtime v1.28.1, where the management-policy create/update gate is live;
-#     2.13.114, which this probe pins, carries v1.27.1. Measured by core-provider from the
-#     image with `go version -m`, not inferred from a changelog.
+#   * THE CONSUMER HALF DID NOT MOVE, and the line that used to stand here saying it did
+#     was wrong. I wrote that core-provider 2.13.115 -- the first cdc image embedding
+#     unstructured-runtime v1.28.1, where the management-policy gate is live -- had moved
+#     this probe's consumer half, because 2.13.114 (pinned here) carries v1.27.1. That
+#     reasoning puts the gate in the wrong process. core-provider answered from
+#     childhealth.go: THE GATE RUNS IN THE CHILD'S OWN CONTROLLER. This probe's child is
+#     `loadbalancers`, a REST kind, so its controller is rest-dynamic-controller -- which on
+#     oasgen 0.84.0 is still unstructured-runtime v1.27.1, so the gate is not live for it at
+#     all. cdc 2.13.115's gate applies to COMPOSITIONS (including a composition used as a
+#     child), not to REST children. So 2.13.115 changes nothing about what this probe
+#     measured, and only the producer half above is open.
 #
 # So a re-run at the 0.84.0 pin is its own exercise with its own cluster, and until it
 # happens the 0.67.0 reading must be quoted WITH its version rather than as "the probe

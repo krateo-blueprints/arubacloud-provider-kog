@@ -118,6 +118,36 @@ expensive, and it needs no change to the RestDefinition.
 > `scripts/composition_rollup_probe.sh` pins 2.13.114, so the probe's own runs are on the
 > pre-gate runtime.
 >
+> **And when the gate DOES become live, a withheld create will not say so — it will look
+> like progress.** Answered from code by core-provider (cdc `childhealth.go`, plus
+> unstructured-runtime v1.28.1+); relayed here, **not measured by this repository**:
+>
+> | child's situation | Ready reason | what a composition's parent reports |
+> |---|---|---|
+> | `NoCreateVerbDeclared` | explicit | `childFailed`, naming the child |
+> | `CreateUnreachable` | explicit | `childFailed`, naming the child |
+> | `NoIdentifierRecorded` | explicit | `childFailed`, naming the child |
+> | **create withheld by policy** | **none yet** | `Creating` **indefinitely**, or `noReadyCondition` |
+>
+> The gate writes `Synced=False/ReconcileError` ("external resource does not exist") and an
+> `ExternalResourceAbsentUnderPolicy` event — and **the rollup reads children's `Ready`,
+> never `Synced`.** So the child keeps whatever `Ready` its controller last wrote, typically
+> `Creating`, which the rollup's default reads as *converging*. An operator who sets
+> `management-policy: observe` on a composition child deliberately therefore gets a parent
+> that reports progress forever rather than a parent that says the create was withheld.
+>
+> That is distinguishable from a broken definition — the three explicit reasons above do
+> name the child — so it is the opposite of the collapse I asked about: not two causes with
+> one message, but **one cause with no message at all**. core-provider#110's decision D4
+> gives it its own reason, `CreateWithheldByPolicy` (`Ready=False`, verdict failed), with
+> its own rollup arm so the parent's message names it. Decided, not built.
+>
+> **Why this matters for the advice in this document:** `management-policy: observe` is
+> recommended below as the way to express read-only intent. Once the gate is live, that
+> annotation on a **composition child** will make the parent look like it is still working.
+> The recommendation stands for a standalone managed CR; for a composition child, wait for
+> D4 or expect to explain the parent's `Creating` to whoever reads it.
+>
 > The unknown-value case is **decision D2** in epic #110 — "invalid acts on nothing, plus a
 > named reason" — still open and awaiting the user's decision, so **no release turns a typo
 > into an error yet** and the warning above stands.
