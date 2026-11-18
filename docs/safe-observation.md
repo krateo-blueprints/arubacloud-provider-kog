@@ -54,8 +54,47 @@ expensive, and it needs no change to the RestDefinition.
 > arrives (later, with the plumbing package), **the only check on this annotation is
 > spelling it correctly**, and the table above is the list of values that mean anything.
 >
-> Relayed from core-provider via oasgen-provider, not measured here: this repository has no
-> cluster on a runtime that ships the gate.
+> **Addendum (2026-11-18, later the same day): the v1.28.0 gate is now MEASURED, and the
+> way I first tried to measure it was wrong in a way worth recording.**
+>
+> The gate is real and it is in both v1.28.0 and v1.28.1, implemented as `meta.ShouldCreate`
+> and `meta.ShouldUpdate`:
+>
+> ```
+> v1.28.0  pkg/controller/worker.go:923   evt.Create && !meta.ShouldCreate(el)
+>                                      || evt.Update && !meta.ShouldUpdate(el)
+> v1.28.0  pkg/controller/worker.go:1304  createWithheld := !ResourceExists && !ShouldCreate(el)
+> v1.28.0  pkg/controller/worker.go:1305  updateWithheld := ResourceExists && !UpToDate && !ShouldUpdate(el)
+> v1.27.1  pkg/controller/worker.go:617   ShouldDelete only -- the pre-gate state
+> ```
+>
+> It landed as krateo-platformops/unstructured-runtime#111, Phase 0 of epic #110, merged
+> 17:12:21Z with v1.28.0 published 17:12:34Z — **thirteen seconds later, so there is no
+> window in which the fix is merged but unreleased.**
+>
+> **Do not measure this by counting `IsActionAllowed` call sites.** That function reads
+> **0 call sites in v1.27.0, v1.27.1, v1.28.0 AND v1.28.1** — it is now a definition with no
+> callers, and its name is exactly what someone reaches for when asking whether the policy is
+> enforced. On that evidence I nearly recorded here that the gate was still dead code in
+> v1.28.x. A control (`ShouldDelete` = 1 call site) did **not** catch the error, because it
+> tested a different function: it proved the search worked while the probe pointed at the
+> wrong name. It is marked Deprecated upstream in provider-runtime#111, pointing at the
+> `Should*` predicates, and the same point has been relayed for unstructured-runtime's copy.
+>
+> **What is still NOT established for this repository, stated so nobody reads the above as
+> coverage:** whether a given oasgen-provider release's `rest-dynamic-controller` image
+> carries a runtime at v1.28.0 or later. The runtime version cannot be read from the RDC
+> source repositories. `krateo-platformops/rest-dynamic-controller` is archived (last push
+> 2026-08-07), and the repository of the same name under the **unhyphenated** org — the dead
+> one `lint-docs` bans by name, one hyphen away from the live org — was last pushed
+> 2026-06-17. The image running here was published today, so neither repository is its
+> source and neither can be read for its runtime pin. So for the pin, **the gate's presence is
+> a question to answer on a cluster**, by annotating a CR and observing whether the action is
+> withheld, not by reading a dependency graph.
+>
+> The unknown-value case is **decision D2** in epic #110 — "invalid acts on nothing, plus a
+> named reason" — still open and awaiting the user's decision, so **no release turns a typo
+> into an error yet** and the warning above stands.
 >
 > One further distinction that cost a wrong reading on the way here:
 > oasgen-provider's own `restdefinition.go` DOES call `IsActionAllowed` for create, update
