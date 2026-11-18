@@ -1323,15 +1323,24 @@ IDENTIFIER_NOT_IN_RESPONSE = {
         "AlertRule's request envelope and response share no top-level key at all, so NO "
         "single path can satisfy both sides and `identifiers` cannot express it at any "
         "depth.\n\n"
-        "THE FAMILY TO LOOK IN is `verbsDescription[].fieldMapping`, which is the only "
-        "mechanism here with SEPARATE destinations: measured on the served CRD at 0.84.0, "
-        "its items carry both `inResponse` (JSONPath into the response body) and "
-        "`inCustomResource` (JSONPath into the CR) -- while `requestFieldMapping` has only "
-        "`inBody`/`inPath`/`inQuery` and no response direction at all, so it cannot bridge "
-        "this. WHAT IS NOT ESTABLISHED: whether identifier MATCHING consults fieldMapping "
-        "at all. oasgen-provider named the family and explicitly did not verify it, and I "
-        "have measured only that the fields exist. Until someone measures the matching "
-        "path, this kind stays allowlisted and unfixed."),
+        "AND NOTHING IN THE CRD CAN EXPRESS IT TODAY -- so do not go looking for the "
+        "configuration that fixes this, because there isn't one. `verbsDescription[]."
+        "fieldMapping` is the only mechanism with SEPARATE destinations (its items carry "
+        "`inResponse` and `inCustomResource`, measured on the served CRD at 0.84.0, while "
+        "`requestFieldMapping` has no response direction at all) -- but oasgen-provider "
+        "traced the wiring and the response direction NEVER REACHES THE COMPARISON: "
+        "builder.go:35 applies only request-direction entries, and the client struct "
+        "carries IdentifierFields, IdentifiersMatchPolicy and Resource with no mapping of "
+        "any kind, so `isItemMatch` has nothing to consult. Their own `isInResource` doc "
+        "comment carries a TODO about adding a ResponseFieldMapping 'possibly in future "
+        "versions'. It is a GAP, not a misconfiguration of ours.\n\n"
+        "Filed upstream as oasgen-provider#845, deliberately titled by the SYMPTOM -- "
+        "'findby cannot match a response whose identifier path differs from the CR's, and "
+        "the obvious fix creates duplicates' -- because a mechanism-titled issue is "
+        "unfindable by whoever hits this next. A TODO inside the function is invisible to "
+        "anyone who has not already found the function, and finding it is the hard part. "
+        "REMOVE THIS ENTRY when #845 ships, and re-run the kind through a chain before "
+        "trusting it -- AlertRule has still never been run."),
 }
 
 
