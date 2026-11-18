@@ -480,6 +480,40 @@ esac
 for bin in "${REQUIRED_BINS[@]}"; do
   command -v "$bin" >/dev/null || die "$bin is not on PATH"
 done
+
+# THE CHAIN'S REQUIRED VARS, CHECKED BEFORE ANYTHING IS CREATED.
+#
+# ga_chain.py refuses a chain whose `vars` declare an empty value that the environment does
+# not supply -- that is how a secret reaches a run without being committed. But it refuses
+# at chain time, which on this script's path is AFTER a GKE cluster exists, the oasgen stack
+# is installed and the credential has been copied. Measured 2026-11-18: a reconcile run at
+# 0.83.1 built the cluster, installed the stack, asserted the auth CRDs, and only then died
+# on an unset PROJECT -- spending a cluster, and a window a colleague had granted for the
+# credential read, on a variable that was knowably absent before the first API call.
+#
+# So the same resolution ga_chain.py performs (NAME or GA_NAME, empty means required) runs
+# here, in preflight. Skipped when SKIP_CHAIN=1, because then no chain runs and the vars
+# are genuinely not needed.
+if [ "${SKIP_CHAIN:-0}" != "1" ]; then
+  missing_vars="$(CHAIN="$CHAIN" python3 -I -c '
+import os, sys, yaml
+chain = yaml.safe_load(open(os.environ["CHAIN"]))
+variables = dict(chain.get("vars", {}))
+for k in list(variables):
+    if k in os.environ:
+        variables[k] = os.environ[k]
+    elif ("GA_" + k) in os.environ:
+        variables[k] = os.environ["GA_" + k]
+print(" ".join(k for k, v in variables.items() if v in (None, "")))
+')" || die "could not read the chain vars from ${CHAIN}"
+  if [ -n "$missing_vars" ]; then
+    die "chain $(basename "$CHAIN") needs these vars from the environment and they are unset:
+    ${missing_vars}
+    Export each as <NAME> or GA_<NAME> and re-run. Refusing BEFORE creating a cluster,
+    because ga_chain.py would refuse after one exists -- which is how a run once spent a
+    GKE cluster and a credential window on an unset PROJECT."
+  fi
+fi
 # Distinguish "the credential is absent" from "the source cluster did not answer".
 # These are different problems with different fixes, and `>/dev/null 2>&1 || die`
 # reported both as the first: the evidence cluster's apiserver intermittently returns
