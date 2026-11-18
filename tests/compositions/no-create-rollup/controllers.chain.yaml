@@ -1,0 +1,30 @@
+# NOT A GA CHAIN, and deliberately not under tests/ga/chains/.
+#
+# pin_verify.sh reads `resources[].kind` from whatever CHAIN points at to decide which
+# RestDefinitions to apply and which controllers to wait for. This file exists only to
+# give it that list for the composition rollup probe: LoadBalancer and Vpc, nothing else.
+#
+# It is never EXECUTED -- the probe runs pin_verify with SKIP_CHAIN=1, so no CR here is
+# created by the chain runner. The composition creates them instead, which is the entire
+# point of the measurement: children created by cdc through a composition, not by a chain.
+#
+# Keeping it out of tests/ga/chains/ is not tidiness. Everything in that directory is GA
+# coverage and validate.py checks all 19 as such; this is a controller manifest for one
+# probe, and filing it as GA coverage would overstate what the repo tests.
+name: no-create-rollup-controllers
+vars:
+  PROJECT: ''
+  LOCATION: ITBG-Bergamo
+# No residue paths: this chain creates nothing at the vendor, so there is nothing to sweep.
+# The Vpc the COMPOSITION creates is swept by the probe script, which knows the names it
+# rendered -- a chain cannot clean up resources it did not make.
+residue: []
+resources:
+# The failing child. findby + get only; no create verb exists at the vendor, so the
+# controller cannot create it and must say so rather than report success.
+- kind: LoadBalancer
+  name: probe-lb
+# The contrast. Creates, reconciles, reaches Ready=Available -- so the parent's
+# `managed children not healthy: <id>` has to name one child and not simply all of them.
+- kind: Vpc
+  name: probe-vpc
