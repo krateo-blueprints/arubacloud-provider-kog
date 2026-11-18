@@ -2415,7 +2415,8 @@ This is the unmodelled-key warning (oasgen-provider#725) recording itself per CR
 a real gain: it names vendor response keys **the CR's `spec` does not carry**, which is
 otherwise a manual audit across 36 kinds.
 
-**That qualifier is load-bearing, and this paragraph lacked it until 2026-11-19.** It read
+**That qualifier is load-bearing, and this paragraph lacked it until 2026-11-18 (UTC;
+local clocks had rolled past midnight, and every timestamp in this document is UTC).** It read
 "keys the CRD does not model", which invites "these values are lost". They are not
 necessarily lost: a key surfaced into `status` by `additionalStatusFields` is **still
 listed**. Measured — all four kinds above declare `additionalStatusFields: [metadata.id]`
