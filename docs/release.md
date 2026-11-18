@@ -138,6 +138,62 @@ rest-dynamic-controller and both charts live in the oasgen-provider monorepo, an
 chart derives the RDC image tag from its own `appVersion`, so the two cannot drift
 apart.
 
+### Moving the pin: what will stop you, and what to do about it
+
+Three gates, each catching a case the others cannot. None of them existed before
+2026-11-18, when the skip list was still a COMMENT in `pin_verify.sh` and
+`OASGEN_VERSION=0.66.0` would have installed a version measured as broken and written
+down as skipped.
+
+**1. The three written forms must agree.** `scripts/validate.py`
+(`verify_pin_sources_agree`) refuses when `OASGEN_VERSION` in
+`.github/workflows/validate.yaml`, that file's own `# CURRENT PIN:` header, and
+`pin_verify.sh`'s `PIN` default disagree. Offline, so it runs on every PR as *static
+validation*. It exists because two of those three had already drifted: the workflow
+header read `THE PIN, 0.52.0` while CI pinned 0.67.0.
+
+**2. The producer's retraction list.** `scripts/check_retracted.py` reads
+oasgen-provider's own `retracted-versions.yaml` rather than a copy of its contents, so a
+retraction published upstream applies here without anyone being told. Enforced in two
+places:
+
+* `pin_verify.sh` consults it before building anything, so a local run cannot verify a
+  retracted version;
+* the **`pin not retracted`** CI job consults it on a pull request *only when a file
+  naming the pin changed*, and on **every push to main** regardless. The split is
+  deliberate: the script fails closed, and making every PR depend on
+  `raw.githubusercontent` would produce a gate that reddens for unrelated reasons.
+
+**3. This repo's own skips**, in `pin_verify.sh`, kept visibly separate from gate 2
+because the two say different things — the producer's list says *nobody* should pin this,
+ours says *this repo* cannot use it. Currently one entry, 0.53.0, which oasgen
+deliberately declined to retract for everyone.
+
+#### When a gate fires
+
+* **RETRACTED (exit 1)** — pin the version the entry names under `use:`. There is no
+  override flag, and that is not an oversight: a retraction is the producer stating that
+  the version damages consumers, and a flag to ignore it would make the gate decoration.
+* **COULD NOT TELL (exit 2)** — the list could not be fetched or parsed. This is **not** a
+  pass. "I could not read the retraction list" is not evidence that a version is safe;
+  retry when it is reachable.
+* **Pin sources disagree** — fix all three, not the one the error names. CI would
+  otherwise verify one version while `pin_verify.sh` verified another, and the run that
+  says "the pin is good" would not be about the pin CI uses.
+
+#### Known obstacles between 0.67.0 and oasgen's newest
+
+Live as of 2026-11-18; the measurements are in
+[the evolution appendix](oasgen-provider-evolution.md).
+
+| version | why not |
+|---|---|
+| 0.69.0, 0.70.0 | retracted: a create whose status write loses a race duplicates the external resource. Scoped to kinds with **no** `findby`, which is 0 of our 36 — but retracted for everyone, so the gate refuses them |
+| 0.77.0 | retracted: a create whose outcome is unknown stays `Ready=False/Creating` instead of reaching `CreateOutcomeUnknown`. Scoped to findby-addressed kinds, which is **36 of 36** here — our maximum-exposure case |
+| 0.83.0 | tagged and never published. Fails at fetch, so it enforces itself |
+| below 0.76.0 | a floor **if `partialFields` is ever adopted**: below it the CRD does not declare the field, Kubernetes prunes it, and an update then sends each map WHOLE. 0 of 36 declare it today, so there is no instance — by luck, not design |
+| 0.80.0 and above | oasgen#818: a create answering 404 stamps `krateo.io/external-create-pending` and it never clears. Exposure is a FRESH install, which is exactly what a bump-verification cluster is. Fixed only on oasgen's unreleased main (#825) |
+
 **The Kubernetes floor is 1.36.** Measured from the published charts rather than
 inferred, re-measured 2026-11-13 across the whole range the pin has travelled:
 
