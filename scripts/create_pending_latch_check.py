@@ -72,10 +72,20 @@ def _ts(value, what):
         Both readings are from the tags' own source, not from a release note.
         THE PARSE STAYS NECESSARY either way: a cluster on v1.28.1 or earlier still writes a
         local offset, nothing upstream rewrites markers already on an object, and
-        provider-runtime's copy keeps nanosecond precision (its UTC fix is #110, unreleased).
-      provider-runtime -- `time.RFC3339Nano` from `time.Now()`, per that repo's own
-        session. RFC3339Nano TRIMS TRAILING ZEROS, so `10:00:00Z` sorts AFTER
-        `10:00:00.1Z` because 'Z' (0x5A) > '.' (0x2E) -- the later instant sorts first.
+        provider-runtime's copy keeps NANOSECOND precision even after its own UTC fix
+        (released as v1.20.1), so the two runtimes still disagree on precision -- seconds
+        against nanoseconds -- and the trailing-zero case stays live for anything that
+        string-compares.
+      provider-runtime -- `MarkerTimeLayout = time.RFC3339Nano`, and its offset changed
+        hands at a known version too:
+          v1.20.0 and earlier   the setters format the time they are passed, i.e. the
+            process's zone (meta.go:16, 228+).
+          v1.20.1 and later     a helper does `t.UTC().Format(MarkerTimeLayout)`
+            (meta.go:27), so the offset is always Z.
+        RFC3339Nano TRIMS TRAILING ZEROS, so `10:00:00Z` sorts AFTER `10:00:00.1Z` because
+        'Z' (0x5A) > '.' (0x2E) -- the later instant sorts first. That hazard is INDEPENDENT
+        of the offset fix and survives it: v1.20.1's own meta.go:18 now says to compare
+        parsed times and never strings, for exactly this reason.
 
     So a tool that reads "the create annotations" meets both formats, and the offset hazard
     is live in the one that writes this repo's CRs. Parsing costs these lines; the caveat
