@@ -2280,8 +2280,153 @@ nothing in this chain's ordinary path produces the latch.
 
 ### What is still unmeasured before the pin can move
 
-* **in-place upgrade** — 0.67.0 → 0.83.1 on a live cluster with CRs already present. This
-  run was a fresh install at 0.83.1; it says nothing about what happens to objects created
-  under the old version.
+* ~~**in-place upgrade** — 0.67.0 → 0.83.1 on a live cluster with CRs already present.~~
+  **MEASURED 2026-11-18, and to 0.84.0 rather than 0.83.1** — see the in-place upgrade axis
+  appendix. Both halves pass. What remains unmeasured is the opposite half of the same
+  question: a **fresh create at 0.84.0**, which this axis never performs.
 * the path still has to skip 0.69.0, 0.70.0, 0.77.0 (retracted) and 0.83.0 (never
   published), all of which `pin_verify.sh` now refuses rather than documents.
+
+## Appendix — the in-place upgrade axis, 0.67.0 → 0.84.0 (2026-11-18)
+
+**The third axis, and the first time this repository has measured one.** It passes on both
+halves. It also answers a question this document left open at the top of the 0.65.0 → 0.67.0
+appendix, and it does so with a field rather than a better diff.
+
+### The instrument, and the retraction it does not undo
+
+This document says, and still says:
+
+> under *both* of those cases an upgrade-and-diff would show unchanged CRDs, so it cannot
+> distinguish "nothing changed" from "nothing was re-rendered"
+
+**That retraction stands. What changed is that there is a discriminator outside the diff.**
+oasgen-provider named it: `status.GeneratorBuild` is compared by `restdefinition.go` as the
+**fifth** drift trigger, the generator being the one input nothing else hashes —
+
+```go
+// restdefinition.go:640-648
+if e.genCfg.generatorChanged(cr.Status.GeneratorBuild) {
+    return e.observeDrift(cr, "the provider that generated this CRD has been upgraded; regenerating the CRD")
+}
+```
+
+so **if the build moves, a re-render demonstrably happened**, and if it does not move while
+the provider version did, the CRD was left on the old generator while the RestDefinition
+kept reporting `Ready` — oasgen-provider#453.
+
+**This also closes the "is open" above.** That passage reasoned about the case where the
+stored `generatorBuild` is *empty*, where `generatorChanged` returns true unconditionally.
+Here it was **not** empty, and both readings exist:
+
+```
+before   0.67.0-f0fd1bf698ea9e44d8206c3ac2fb1f5164768c84     all 4 RestDefinitions
+after    0.84.0-de67f828b6a4831d7862f07c8c57df8c78f9c90b     all 4 RestDefinitions
+```
+
+**So the re-render FIRED, and it was a byte-identical no-op apply** — all eight CRD schemas
+hash the same before and after (sha256 over the schema only; a whole-object hash moves for
+reasons that are not a re-render). Of the two possibilities the passage left open, it is the
+first. The fresh-render-per-tag method was still the right call, because the discriminator is
+a status field the offline method never has.
+
+### The snapshot half
+
+```
+RestDefinitions      4/4 Ready=True after, generatorBuild moved on 4/4
+CRD schemas          8/8 byte-identical (securitygroups, securityrules, subnets, vpcs
+                     and their four Configuration CRDs)
+CRs                  4/4 survived with the SAME uid, the same spec key sets, the same
+                     top-level spec keys, Synced=True and Ready=True, generation still 1
+storedVersions       unchanged on all 8 -- no stored object needs a migration
+```
+
+`generation` still 1 is worth its own line: **nothing rewrote a spec.** The object the
+controller re-read is the object the old stack stored.
+
+### The behavioural half, on the CRs the old stack created
+
+Run through `scripts/ga_chain.py --existing`, which observes CRs an earlier run left behind
+instead of creating them — because creating them would measure a fresh CR and report it as a
+survivor.
+
+```
+4 resources observed (pre-existing)
+drift corrected      Vpc, Subnet, SecurityGroup, SecurityRule -- 4/4
+deletes verified     4/4 -> 404 at the vendor, each by its own URL
+residue              attempt 1: leftovers = 0, clean
+transport census     54 attempts, 50 ok, 0 transport failures, 4 HTTP errors
+chain exit           0
+```
+
+The 4 HTTP errors **are** the four intentional 404s from delete verification; the census
+counts them, and a reader who does not know that will misread the line.
+
+### A window nobody had named: the controllers roll separately from the provider
+
+Ten seconds after `helm upgrade` returned:
+
+```
+oasgen-provider                               oasgen-provider:0.84.0
+arubacloud-network-vpc-controller             rest-dynamic-controller:0.84.0
+arubacloud-network-subnet-controller          rest-dynamic-controller:0.67.0   <--
+arubacloud-network-securitygroup-controller   rest-dynamic-controller:0.67.0   <--
+arubacloud-network-securityrule-controller    rest-dynamic-controller:0.67.0   <--
+```
+
+**Three controllers on the old rest-dynamic-controller while the CRDs had already been
+re-rendered.** It closed on its own — all four read 0.84.0 ten minutes later — but a
+snapshot that does not record images cannot tell a closed window from one that never closes,
+and the second is a stuck roll. `upgrade_snapshot.py` now records every Deployment's images
+and ready replicas, and the diff **fails** when an image does not carry the target version.
+
+### What arrived with the upgrade: `krateo.io/unmodelled-keys-reported`
+
+New on all four CRs, absent before (measured, not assumed — the before-snapshot records
+annotations):
+
+```
+Vpc            gen=1;metadata=category,createdBy,creationDate,id,ownerId,project,updateDate,updatedBy,uri,version
+Subnet         gen=1;metadata=<same>;properties=vpc
+SecurityGroup  gen=1;metadata=<same>;properties=vpc
+```
+
+This is the unmodelled-key warning (oasgen-provider#725) recording itself per CR, and it is
+a real gain: it names vendor response keys the CRD does not model, which is otherwise a
+manual audit across 36 kinds.
+
+**Read it as a floor, never as an inventory.** oasgen-provider#732 is **open**: the
+comparison is only one level deep, so keys lost inside a nested object are silent — and, in
+the issue's own words, *that silence reads as "nothing is being lost."* Two related defects
+are closed (#757, which asserted an update **would** delete the keys, a property of the
+vendor's endpoint it cannot observe; #734, where the annotation stayed at an old generation
+while the spec moved on — our `gen=1` matches `generation: 1`, so it is current here).
+
+### Three defects this run found, all in our own instruments
+
+1. **`ga_chain.py` defaults `KUBE_CONTEXT` to `kind-aruba-ga`.** The driver did not set it,
+   so every `kubectl` went to a context that does not exist on GKE and the chain reported
+   `no token in default/arubacloud-token` — a message about the credential for a failure
+   about the cluster. The Secret was readable throughout (1656 bytes). **This cost the
+   behavioural half of the first attempt, after the upgrade had already been spent.** The
+   driver now exports the context; the chain's error names the context and the kubectl
+   stderr; and a token preflight refuses *before* the upgrade, the same class as the
+   `PROJECT` check.
+2. **A crash impersonating a verdict.** `upgrade_snapshot.py --diff` used exit 1 for "the
+   upgrade is not clean" (about the cluster) and 2 for VOID (about the instrument) — and
+   then a `KeyError` on a field an older snapshot lacked exited **1**. Both sides of a diff
+   are now normalised against field defaults, and any unexpected exception exits 2.
+3. **A guard that stopped the run and said nothing.** Under `set -euo pipefail` the failing
+   `kubectl` in the token preflight failed the *assignment*, so `set -e` killed the script
+   before the diagnostic printed: exit 1, no message, right answer, useless.
+
+### What this does NOT establish
+
+* **A fresh create at 0.84.0.** Stage 1 created under 0.67.0; stages 2 and 3 observed,
+  drifted and deleted under 0.84.0. **Nothing has yet created a resource under 0.84.0**, and
+  that is the half a pin move rests on. Until it is measured the pin stays at 0.67.0.
+* **36 kinds.** This run installs `RESTDEFS_SCOPE=chain`, so it is **4** RestDefinitions.
+  "All 36 re-reach Ready" is not a sentence this measurement supports, and oasgen-provider
+  has agreed not to write it either.
+* **In-place upgrade from any version other than 0.67.0**, and no intermediate stop: this is
+  one hop, 0.67.0 straight to 0.84.0.
