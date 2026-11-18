@@ -138,6 +138,31 @@ rest-dynamic-controller and both charts live in the oasgen-provider monorepo, an
 chart derives the RDC image tag from its own `appVersion`, so the two cannot drift
 apart.
 
+### Before the next release: bump the chart-push pin
+
+**Open item, recorded here because this is where a release is performed and nowhere else
+would stop it.**
+
+Chart pushes go through `krateo-platformops/.github/.github/actions/chart-push`
+(krateo-blueprints/charts rule 14), pinned in `release-tag.yaml` at
+`5f126b7d93ec5302eb9cc57a3af157550175fbaf`. At that commit `push.sh` reads the manifest
+back with the registry credential on **curl's command line** — `-u user:pass` at line 69
+and `-H "Authorization: Bearer ..."` at line 73 — so both sit in process argv and are
+readable by any other process in the same job. The credential is never echoed or written
+to a file and the token is pull-scoped, which bounds it; but it IS an exposure the previous
+bare `helm push` did not have, because that path passed the token to
+`helm registry login --password-stdin` and never put it in an argument.
+
+A fix is in progress upstream (both reads moved onto `curl -K -` on stdin, with a test
+that asserts argv is clean). **Bump the pin to that commit before cutting the next tag**,
+and verify the new `push.sh` and `action.yml` sha256 against whatever reports them rather
+than taking the SHA on trust — the tag that carries it is annotated, so peel it (`1.4.0^{}`)
+rather than reading `git/ref/tags/1.4.0`, which returns the tag object.
+
+This is not urgent in the sense that the code path only runs on a tag push: nothing
+executes `push.sh` until a release. It is recorded as a release precondition rather than a
+TODO because a release is exactly the moment it would otherwise be discovered.
+
 ### Moving the pin: what will stop you, and what to do about it
 
 Three gates, each catching a case the others cannot. None of them existed before

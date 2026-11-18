@@ -144,7 +144,26 @@ jobs:
             exit 1; }
           echo "every chart qualifies for the blueprints channel"
 
+      - name: Locate the shared chart-push script
+        id: chart-push
+        # krateo-blueprints/charts PUBLISHING.md rule 14: chart pushes go through the
+        # shared action, which retries ghcr.io's "failed to perform Tag ... not found"
+        # after an ACCEPTED upload -- and only that. Every other failure still fails on
+        # the first attempt, and a second push whose digest differs from the orphaned one
+        # fails rather than tagging blind.
+        #
+        # LOCATE mode (no inputs) rather than push mode, because this job pushes every
+        # chart it finds in one loop; push mode is one archive per step. The action needs
+        # helm on the runner, which `Install Helm` above provides, and push.sh reads the
+        # manifest back using the same credentials, which is why the env below is on the
+        # pushing step.
+        uses: krateo-platformops/.github/.github/actions/chart-push@5f126b7d93ec5302eb9cc57a3af157550175fbaf # main 2026-11-18
+
       - name: Package and push every chart
+        env:
+          CHART_PUSH: ${{ steps.chart-push.outputs.path }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p charts-dist
@@ -187,7 +206,7 @@ jobs:
               exit 1; }
             echo "archive verified: schema + CompositionDefinition present, CD version ${cdver}"
 
-            helm push "$tgz" "${OCI_REPO}"
+            bash "${CHART_PUSH}" "$tgz" "${OCI_REPO}"
             echo "Published ${OCI_REPO}/${name}:${VERSION}"
             echo "::endgroup::"
           done
