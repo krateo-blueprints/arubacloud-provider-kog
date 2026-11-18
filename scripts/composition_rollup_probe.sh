@@ -169,11 +169,23 @@ try:
     d = json.load(sys.stdin)
 except Exception as e:
     sys.exit("could not parse the /projects response as JSON: %s" % e)
-items = d.get("value") if isinstance(d, dict) else d
-if items is None and isinstance(d, dict):
-    items = d.get("items") or d.get("data")
+# Aruba answers {"total": N, "values": [...]}. MEASURED against the live API, not
+# guessed: the first version of this looked for value/items/data and failed on the
+# plural -- `values`, not `value`. The alternatives stay as fallbacks, and the error
+# below names every key tried plus the keys actually present, because "no list of
+# projects" without the real keys sent me back to the cluster for a second look.
+items = None
+if isinstance(d, list):
+    items = d
+elif isinstance(d, dict):
+    for key in ("values", "value", "items", "data"):
+        if isinstance(d.get(key), list):
+            items = d[key]
+            break
 if not isinstance(items, list):
-    sys.exit("the /projects response has no list of projects at value/items/data")
+    sys.exit("the /projects response carries no project list. Tried values/value/"
+             "items/data; the keys actually present are: %s"
+             % (sorted(d.keys()) if isinstance(d, dict) else type(d).__name__))
 out = []
 for it in items:
     md = (it or {}).get("metadata") or {}
@@ -213,12 +225,44 @@ kubectl --context "$CTX" get deploy -n "$NS" \
   | grep -E 'oasgen|rest-dynamic' || note "(no oasgen/rdc deployment matched -- report this verbatim)"
 
 # ------------------------------------------------------------------------ core-provider
-say "installing core-provider${CORE_PROVIDER_VERSION:+ ${CORE_PROVIDER_VERSION}}"
-CP_VERSION_ARGS=()
-[ -n "$CORE_PROVIDER_VERSION" ] && CP_VERSION_ARGS=(--version "$CORE_PROVIDER_VERSION")
+# TWO charts, crds first, both pinned to ONE version. The core-provider chart installs no
+# CRDs at all -- measured: its manifest contains ServiceAccounts, ConfigMaps and a PDB, and
+# `kubectl get crd` found nothing in core.krateo.io after a successful install, so the
+# CompositionDefinition apply failed with "no matches for kind". Same split as
+# oasgen-provider / oasgen-provider-crds, which pin_verify.sh already installs in that
+# order.
+#
+# The version is resolved ONCE and used for both. Letting helm pick latest per chart would
+# install two charts that are only coincidentally in step, and a release landing mid-run
+# would split them -- installer has a whole gate about version lines for this reason.
+if [ -z "$CORE_PROVIDER_VERSION" ]; then
+  CORE_PROVIDER_VERSION="$(helm show chart \
+    oci://ghcr.io/krateo-platformops/charts/core-provider 2>/dev/null \
+    | awk '/^version:/{print $2; exit}')"
+  [ -n "$CORE_PROVIDER_VERSION" ] || die "could not resolve the current core-provider chart
+version, and this script will not let helm choose one per chart"
+  note "resolved core-provider chart ${CORE_PROVIDER_VERSION}; both charts pinned to it"
+fi
+
+say "installing core-provider-crds ${CORE_PROVIDER_VERSION}"
+helm --kube-context "$CTX" upgrade --install core-provider-crds \
+  oci://ghcr.io/krateo-platformops/charts/core-provider-crds \
+  --version "$CORE_PROVIDER_VERSION" \
+  --namespace "$NS" --create-namespace --wait --timeout 5m \
+  >/dev/null || die "core-provider-crds install failed"
+
+# CONTROL: assert the CRD is SERVED before anything tries to apply one. Discovering this
+# at apply time is what cost the previous run -- "no matches for kind" reads like a bad
+# manifest, and the manifest was fine.
+kubectl --context "$CTX" get crd compositiondefinitions.core.krateo.io >/dev/null 2>&1 \
+  || die "core-provider-crds installed but compositiondefinitions.core.krateo.io is not
+served. Nothing below can work; report this verbatim rather than retrying."
+note "compositiondefinitions.core.krateo.io is served"
+
+say "installing core-provider ${CORE_PROVIDER_VERSION}"
 helm --kube-context "$CTX" upgrade --install core-provider \
   oci://ghcr.io/krateo-platformops/charts/core-provider \
-  ${CP_VERSION_ARGS[@]+"${CP_VERSION_ARGS[@]}"} \
+  --version "$CORE_PROVIDER_VERSION" \
   --namespace "$NS" --create-namespace --wait --timeout 10m \
   >/dev/null || die "core-provider install failed"
 
@@ -253,11 +297,27 @@ say "packaging ${CHART_DIR} with a content-addressed version"
 CONTENT_SHA="$(find "$CHART_DIR" -type f ! -name '*.tgz' -print0 \
   | LC_ALL=C sort -z \
   | xargs -0 shasum -a 256 \
-  | shasum -a 256 | cut -c1-12)"
+  | shasum -a 256 | cut -c1-8)"
 [ -n "$CONTENT_SHA" ] || die "could not digest the chart directory"
-PROBE_VERSION="0.0.0-probe-${CONTENT_SHA}"
+# `0.0.0-p<8 hex>` = 15 bytes, and the shape is forced from both ends.
+#
+# CEILING: CompositionDefinition's CRD caps spec.chart.version at 20 BYTES. The first
+# version of this used `0.0.0-probe-<12 hex>` (24 bytes) and the apiserver refused it --
+# "Too long: may not be more than 20 bytes" -- after the chart had already been packaged
+# and served. 20 bytes is tight for a semver carrying any prerelease tag at all.
+#
+# FLOOR: the `p` prefix is load-bearing. A bare hex digest can be all digits, and a
+# numeric semver prerelease identifier may not have a leading zero, so `0.0.0-0123abc`
+# would be fine while `0.0.0-01234567` would not -- an invalid chart version roughly one
+# time in sixteen, which is the kind of flake nobody diagnoses.
+PROBE_VERSION="0.0.0-p${CONTENT_SHA}"
+if [ "${#PROBE_VERSION}" -gt 20 ]; then
+  die "the computed chart version ${PROBE_VERSION} is ${#PROBE_VERSION} bytes and
+CompositionDefinition caps spec.chart.version at 20. Shorten the digest rather than the
+prefix: the prefix keeps the prerelease identifier non-numeric."
+fi
 note "chart content digest ${CONTENT_SHA}"
-note "version ${PROBE_VERSION}"
+note "version ${PROBE_VERSION} (${#PROBE_VERSION} bytes, cap is 20)"
 helm package "$CHART_DIR" --version "$PROBE_VERSION" --app-version "$PROBE_VERSION" \
   --destination "$WORK" >/dev/null || die "helm package failed"
 TGZ="${CHART_NAME}-${PROBE_VERSION}.tgz"
@@ -314,12 +374,73 @@ CHART_URL="http://probe-chart.${NS}.svc.cluster.local/${TGZ}"
 # Prove the URL serves the bytes BEFORE handing it to cdc. Without this, an unreachable
 # chart and a cdc that cannot parse one are the same symptom, and the second is a finding
 # while the first is a typo.
-say "control: the chart URL serves the archive from inside the cluster"
-kubectl --context "$CTX" run probe-chart-check -n "$NS" --rm -i --restart=Never \
-  --image="$HTTPD_IMAGE" --command -- \
-  sh -c "wget -q -O /tmp/c.tgz '${CHART_URL}' && tar tzf /tmp/c.tgz | head -3" \
-  || die "the chart URL is not fetchable in-cluster: ${CHART_URL}
-Nothing below this point would be interpretable, so stopping here."
+# Fetch a URL from inside the cluster and print "HTTP:<code>" plus whatever the body was.
+# Same apply/wait/logs shape as aruba_get, and for the same reason: `kubectl run --rm -i`
+# is NOT a reliable way to capture a container's stdout here. Measured on this cluster --
+# with stderr dropped it produced ZERO BYTES on stdout, so a `grep` over it could never
+# match however well the fetch worked, and 18 retries all "failed" against a chart server
+# that answered in under a millisecond when asked directly. `kubectl logs` reads what the
+# container actually wrote.
+chart_probe() {
+  local url="$1" name="chart-check-${RANDOM}${RANDOM}" out=""
+  kubectl --context "$CTX" apply -f - >/dev/null <<YAML || return 1
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${name}
+  namespace: ${NS}
+  labels: { app: chart-check }
+spec:
+  restartPolicy: Never
+  containers:
+  - name: curl
+    image: ${CURL_IMAGE}
+    env:
+    - name: URL
+      value: "${url}"
+    command: ["sh","-c"]
+    args:
+    - |
+      code=\$(curl -sS -m 10 -o /tmp/c.tgz -w '%{http_code}' "\$URL") || code=000
+      printf 'HTTP:%s\\n' "\$code"
+      # Prove it is a real gzipped chart and not an error page that happens to be 200.
+      tar tzf /tmp/c.tgz 2>/dev/null | head -3 || echo "NOT-A-TARBALL"
+YAML
+  kubectl --context "$CTX" wait --for=jsonpath='{.status.phase}'=Succeeded \
+    "pod/${name}" -n "$NS" --timeout=120s >/dev/null 2>&1 || true
+  out="$(kubectl --context "$CTX" logs "pod/${name}" -n "$NS" 2>/dev/null || true)"
+  kubectl --context "$CTX" delete "pod/${name}" -n "$NS" --wait=false >/dev/null 2>&1 || true
+  printf '%s' "$out"
+}
+
+say "control: the chart URL serves a real tarball from inside the cluster"
+# Retried because attempt 2 on this cluster hit a GENUINE connection timeout moments after
+# `rollout status` returned, and the same URL answered later -- an unprogrammed ClusterIP
+# drops packets rather than refusing them, so a few seconds of lag reads as a dead server.
+# It still fails hard if it never succeeds: an unreachable chart and a chart the cdc
+# refuses are the same symptom otherwise, and only the second is a finding.
+chart_ok=0
+for attempt in $(seq 1 12); do
+  probe_out="$(chart_probe "$CHART_URL")"
+  probe_code="$(printf '%s' "$probe_out" | sed -n 's/^HTTP:\([0-9][0-9]*\).*/\1/p' | head -1)"
+  if [ "$probe_code" = "200" ] && ! printf '%s' "$probe_out" | grep -q 'NOT-A-TARBALL'; then
+    chart_ok=1
+    note "chart URL answered 200 with a readable tarball on attempt ${attempt}"
+    printf '%s\n' "$probe_out" | sed -n '2,4p' | sed 's/^/      /'
+    break
+  fi
+  note "attempt ${attempt}: code=${probe_code:-<none>}"
+  sleep 10
+done
+[ "$chart_ok" = "1" ] || die "the chart URL never served a readable tarball from inside the
+cluster: ${CHART_URL}
+Last probe output was: ${probe_out:-<empty>}
+An EMPTY probe output means the PROBE failed, not the server -- check the pod and its logs
+before concluding anything about the chart. If the output shows a code, check in this order
+because each rules out a different layer: the server over localhost
+(\`kubectl exec deploy/probe-chart -- wget -S -O /dev/null http://127.0.0.1/<tgz>\`), then
+pod-to-pod by pod IP, then pod-to-ClusterIP. Nothing below this point would be
+interpretable, so stopping here."
 
 # ------------------------------------------------------------- the CompositionDefinition
 # NO spec.deploy.targetRef, deliberately. core-provider's deploy.IsClusterLocalChartURL
