@@ -2222,3 +2222,62 @@ production — which is the only reason the instrument was suspected instead of 
   `krateo.io/external-create-pending` and it never clears. Its exposure is a FRESH install,
   which is exactly what a bump-verification cluster is, so it will bite the measurement
   rather than steady state. Fixed only on oasgen's unreleased main (#825).
+
+## Appendix — the reconcile axis at 0.83.1 (2026-11-18)
+
+**Second of the three bump axes, and the one the pin decision turns on.** The shape axis
+(previous appendix) said the CRDs do not change; this says the controllers reconcile.
+
+Released images on a disposable GKE cluster in europe-west2-a, driven by
+`tests/ga/chains/network-security.yaml` through the controllers — not an API probe:
+
+```
+images the chain actually ran against, read from the cluster:
+  oasgen-provider                1 x ghcr.io/krateo-platformops/oasgen-provider:0.83.1
+  rest-dynamic-controller        4 x ghcr.io/krateo-platformops/rest-dynamic-controller:0.83.1
+
+RESULT: 4 resources created and observed
+  drift Vpc/ga-ns-vpc            ok
+  drift Subnet/ga-ns-subnet      ok
+  drift SecurityGroup/ga-ns-sg   ok
+  drift SecurityRule/ga-ns-sr    ok
+
+teardown, reverse dependency order: all four deleted, EACH delete verified 404 at the vendor
+residue check (ground truth): leftovers = 0, clean on attempt 1
+transport census: 58 API attempts / 54 ok / 0 transport failures / 4 HTTP errors
+chain exited 0
+```
+
+**The 4 HTTP errors are the 4 delete verifications**, which are 404 by design — checked
+line by line rather than assumed from the count matching the resource count.
+
+So at 0.83.1 the full GA bar holds for all four kinds in the chain: **create, observe,
+drift injected and corrected, delete verified absent, residue zero.**
+
+### oasgen#818 did not fire, and here is what that is worth
+
+#818 (present from 0.80.0, fixed only on unreleased main by #825) stamps
+`krateo.io/external-create-pending` on a create answering 404 and nothing clears it. Its
+exposure is a FRESH install, which is exactly what this cluster was, so it was sampled
+rather than hoped about: `scripts/create_pending_latch_check.py` ran every 20 seconds for
+the life of the chain.
+
+```
+peak CRs sampled while alive : 4 of 4
+latched                      : 0 at every sample
+final sample                 : exit 2 (no CRs -- the chain had deleted them), not a pass
+```
+
+**What this does NOT establish.** Every create in this chain SUCCEEDED, and #818 needs a
+create that answers 404. So the detector was never given a positive to find, and its
+ability to report a latch remains **undemonstrated** — a zero from an instrument not shown
+capable of a one is weaker than the number looks. What the run does establish is that
+nothing in this chain's ordinary path produces the latch.
+
+### What is still unmeasured before the pin can move
+
+* **in-place upgrade** — 0.67.0 → 0.83.1 on a live cluster with CRs already present. This
+  run was a fresh install at 0.83.1; it says nothing about what happens to objects created
+  under the old version.
+* the path still has to skip 0.69.0, 0.70.0, 0.77.0 (retracted) and 0.83.0 (never
+  published), all of which `pin_verify.sh` now refuses rather than documents.
