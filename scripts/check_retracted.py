@@ -8,7 +8,8 @@
 
 WHY THIS REPLACES A HAND-MAINTAINED SKIP LIST. scripts/pin_verify.sh carried its own skips
 (0.66.0, 0.53.0, 0.54.0) and was therefore wrong the moment oasgen retracted something
-nobody told us about. Walking from the 0.67.0 pin upward it would have sailed through
+nobody told us about. Walking from the then-current 0.67.0 pin upward it would have
+sailed through
 0.69.0, 0.70.0 and 0.77.0 -- all three published, all three installing cleanly, which by
 the argument that found them is the DANGEROUS kind of bad version: one that does not
 exist fails loudly at fetch, one that exists installs silently.

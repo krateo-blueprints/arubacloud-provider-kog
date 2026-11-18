@@ -19,7 +19,7 @@ kubectl logs deploy/oasgen-provider -n krateo-system
 Common causes:
 
 - **Wrong provider image or version.** These RestDefinitions need
-  oasgen-provider **≥ 0.67.0**. Check the deployment image is
+  oasgen-provider **≥ 0.84.0**. Check the deployment image is
   `ghcr.io/krateo-platformops/oasgen-provider` at that version or newer; older
   lineages reject or mis-handle these definitions. Below **0.35.0** the failure is
   total and unhelpfully silent: libopenapi cannot parse these OAS documents, so
@@ -33,7 +33,7 @@ Common causes:
 - **No `authentication` block in the generated `<Kind>Configuration`.** On the 7
   providers whose spec declares an `apiKey` scheme this means oasgen is older than
   **0.19.0** — earlier versions skipped that scheme silently. Upgrade the provider
-  (the pin is 0.67.0). See [authentication](authentication.md).
+  (the pin is 0.84.0). See [authentication](authentication.md).
 
 ## A resource CR gets `401 Unauthorized`
 
@@ -75,9 +75,22 @@ duplicates:
 
 ## Editing a RestDefinition fails with an immutability error
 
-`resourceGroup`, `kind`, `identifiers`, `additionalStatusFields`,
-`excludedSpecFields`, `configurationFields` are immutable. Delete and recreate the
-RestDefinition (this recreates the generated CRD). See
+Three fields are immutable, two are append-only, and the rest are mutable — measured on
+the served CRD at the 0.84.0 pin:
+
+| field | rule in the served CRD | effect |
+|---|---|---|
+| `spec.resourceGroup` | `self == oldSelf` | **immutable** |
+| `spec.resource.kind` | `self == oldSelf` | **immutable** |
+| `spec.resource.identifiers` | `self == oldSelf` | **immutable** |
+| `spec.resource.additionalStatusFields` | `size(self) >= size(oldSelf) && oldSelf.all(i, v, self[i] == v)` | **append-only** — adding entries at the end is allowed |
+| `spec.resource.includedSpecFields` | same append-only rule | **append-only** |
+| `spec.resource.excludedSpecFields` | none | mutable (since 0.72.0, oasgen#666) |
+| `spec.resource.configurationFields` | none | mutable (since 0.84.0, oasgen#837) |
+| `spec.oasPath`, `compareScope`, `verbsDescription` | none | mutable |
+
+Only a change to one of the three **immutable** fields needs the RestDefinition deleted
+and recreated (which recreates the generated CRD). See
 [adding-a-resource](adding-a-resource.md#immutability).
 
 ## Delegated (`*ApiRef`) actions fail with "no snowplow client is configured"
@@ -101,7 +114,7 @@ is never released. Nothing in the logs points at the version.
 kubectl get deploy -n krateo-system -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].image}{"\n"}{end}' | grep rest-dynamic-controller
 ```
 
-If it is below 0.67.0, upgrade the provider chart to **0.67.0** — the RDC tag is
+If it is below 0.84.0, upgrade the provider chart to **0.84.0** — the RDC tag is
 derived from the chart's `appVersion`, so on the monorepo charts there is nothing
 to override and no way for the pair to drift
 — see [prerequisites](../README.md#prerequisites). Otherwise, check the

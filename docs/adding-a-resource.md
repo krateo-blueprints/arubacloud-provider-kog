@@ -118,8 +118,18 @@ smoke job remains the gate. Two things it reports that are easy to misread:
 
 ## Immutability
 
-`resourceGroup`, `resource.kind`, `identifiers`, `additionalStatusFields`,
-`excludedSpecFields`, and `configurationFields` are **immutable** after the
-RestDefinition is created (enforced by CEL in the CRD). Changing any of them means
-deleting and recreating the RestDefinition (and its generated CRD). Reconcile
-behaviour fields (`fieldMapping`, `*ApiRef`, `compareScope`, …) are mutable.
+`resourceGroup`, `resource.kind` and `identifiers` are **immutable** after the
+RestDefinition is created (CEL `self == oldSelf` in the CRD). Changing one of those means
+deleting and recreating the RestDefinition (and its generated CRD).
+
+`additionalStatusFields` and `includedSpecFields` are **append-only**, not immutable —
+their CEL rule is `size(self) >= size(oldSelf) && oldSelf.all(i, v, self[i] == v)`, so new
+entries at the end are explicitly allowed and existing ones may not be changed or removed.
+
+`excludedSpecFields` (oasgen#666, from 0.72.0) and `configurationFields` (oasgen#837, from
+0.84.0) are **mutable**; both were immutable at the 0.67.0 pin, which is why older notes in
+this repository say so. Reconcile behaviour fields (`*ApiRef`, `compareScope`,
+`verbsDescription` and its per-verb `fieldMapping`) are mutable — note that `fieldMapping`
+lives on each **verb**, under `verbsDescription`, not at `spec.resource` level.
+
+All of the above is measured on the served CRD at the 0.84.0 pin, field by field.

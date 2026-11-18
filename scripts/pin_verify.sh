@@ -19,7 +19,7 @@
 #   KEEP=0 scripts/pin_verify.sh     # delete the cluster afterwards
 set -uo pipefail
 
-PIN="${OASGEN_VERSION:-0.67.0}"              # 0.67.0 is the PIN; 0.36.0 is the FLOOR.
+PIN="${OASGEN_VERSION:-0.84.0}"              # 0.84.0 is the PIN; 0.36.0 is the FLOOR.
                                              # It SKIPS 0.66.0, 0.53.0 and 0.54.0, all measured.
                                              # 0.66.0: #664 fixes our two no-create kinds and
                                              # introduces a WRITE LOOP on them -- the create
@@ -87,13 +87,26 @@ CHAIN="${CHAIN:-tests/ga/chains/network-security.yaml}"
 # experimental definition without putting it in restdefinitions/, where CI and every
 # other run would pick it up. See tests/experimental/.
 #
-# It is a whole DIRECTORY and not an "apply this one afterwards" overlay, which was
-# the first attempt and does not work: configurationFields are IMMUTABLE once the CRD
-# has been generated, so applying a definition that narrows them over one already
-# admitted is rejected outright --
+# It is a whole DIRECTORY and not an "apply this one afterwards" overlay. That was the
+# first attempt, and at the 0.67.0 pin it did not work, because configurationFields were
+# immutable once the CRD had been generated:
 #   spec.resource.configurationFields: Invalid value: ConfigurationFields are
 #   immutable, you cannot change them once the CRD has been generated
-# The experimental definition has to be the only one the cluster ever sees.
+#
+# THAT REASON EXPIRED AT THE 0.84.0 PIN. oasgen#837 removed the CEL rule, measured on the
+# served CRD: spec.resource.configurationFields now carries no validations at all, so the
+# overlay the first attempt wanted WOULD be admitted today. excludedSpecFields went the
+# same way in 0.72.0 (#666).
+#
+# The directory is kept anyway, for a reason that does not depend on the CEL rule: an
+# overlay leaves the cluster holding BOTH definitions, and which one a controller used is
+# then an inference from ordering rather than a fact about the run. The experimental
+# definition being the only one the cluster ever sees is the property worth having, and it
+# was true before the rule was removed and is true after. Changing this to an overlay is a
+# separate decision with its own argument, not a consequence of #837.
+#
+# Still immutable at 0.84.0, so an overlay cannot vary these: spec.resourceGroup,
+# spec.resource.kind, spec.resource.identifiers.
 RESTDEFS_DIR="${RESTDEFS_DIR:-restdefinitions/}"
 # Install the charts from a LOCAL directory and run LOCALLY BUILT images instead of
 # the released ones. Everything this script exists to prove depends on using neither,

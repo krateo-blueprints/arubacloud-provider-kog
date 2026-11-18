@@ -125,7 +125,7 @@ Scope analysed: 11 specs, ~108 operations, **34 manageable resources** across th
 | C4 | Resource has no delete verb | 🟧 | `baremetal/Hpc` | Allow lifecycle without delete; skip finalizer teardown |
 | C5 | Update only via sub-endpoint (no `PUT {id}`) | 🟧 | `compute/CloudServer` | `updateApiRef` delegation / action verbs |
 | D1 | One OAS document per RestDefinition | 🟧 | `compute` (create in `_v1.1`) | Allow multiple OAS documents / overlays per RestDefinition |
-| D2 | Immutable `identifiers`/`kind`/`configurationFields` | 🟩 | operational | Documented; no change required |
+| D2 | Immutable `identifiers`/`kind`/`resourceGroup` (`configurationFields` became mutable in 0.84.0, `excludedSpecFields` in 0.72.0) | 🟩 | operational | Documented; no change required |
 
 ---
 
@@ -654,12 +654,32 @@ future resource that needs a *native* verb from a second document.
 overlay), so version-split APIs need not be spliced.
 
 ### D2 — immutability of structural fields (🟩 operational)
-`resourceGroup`, `resource.kind`, `identifiers`, `additionalStatusFields`,
-`excludedSpecFields`, `configurationFields` are immutable after creation
-(enforced by CEL in the CRD). Fine, but it means the choices the generator bakes
-in (e.g. `identifiers: [metadata.name]`) cannot be changed without recreating the
-RestDefinition. No change requested — documented so operators know a regeneration
-that alters these fields requires delete + recreate.
+
+**Three fields, not six, and the list shrank twice.** Measured on the served CRD at the
+0.84.0 pin by reading `x-kubernetes-validations` field by field:
+
+| field | rule at 0.84.0 | effect |
+|---|---|---|
+| `spec.resourceGroup` | `self == oldSelf` | immutable |
+| `spec.resource.kind` | `self == oldSelf` | immutable |
+| `spec.resource.identifiers` | `self == oldSelf` | immutable |
+| `spec.resource.additionalStatusFields` | `size(self) >= size(oldSelf) && oldSelf.all(i, v, self[i] == v)` | **append-only** |
+| `spec.resource.includedSpecFields` | the same append-only rule | **append-only** |
+| `spec.resource.excludedSpecFields` | none | mutable from 0.72.0 (oasgen#666) |
+| `spec.resource.configurationFields` | none | mutable from 0.84.0 (oasgen#837) |
+
+So this section said "immutable" about four fields that are not: two were never immutable
+but **append-only** (new entries at the end are explicitly allowed), and two have become
+mutable — the second of them in the release this repository is now pinned to.
+
+**`identifiers` stays immutable deliberately, and that is the one to understand.** Adding
+an identifier makes matching stricter and can orphan a live CR; removing one makes it
+looser, which is oasgen#444's measured case where a CR adopted another object, reported
+`Synced=True` and then deleted it. There is **no safe direction**, unlike its two former
+siblings which each had one. So this is not an omission waiting to be fixed.
+
+What still holds unchanged: a regeneration that alters `resourceGroup`, `resource.kind` or
+`identifiers` requires delete + recreate of the RestDefinition and its generated CRD.
 
 ---
 
