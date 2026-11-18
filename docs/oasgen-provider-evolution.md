@@ -2191,8 +2191,9 @@ produced a confident result from the wrong source:
 
 ```
 clone     ~/krateo/krateo-oasgen-provider   origin https://github.com/krateo-platformops/oasgen-provider.git
-          (two other local clones exist: one stale on the same org, one a personal fork
-           at github.com/braghettos/oasgen-provider -- see the hyphen trap below)
+          (two other local clones exist: one STALE on the same org -- it has no 0.83.1 tag --
+           and one a personal fork on an unrelated account. Neither is a valid source for a
+           pin measurement; see the hyphen trap below)
 tag SHAs  verified against `git ls-remote` rather than trusted locally:
             0.67.0 -> f0fd1bf698ea   MATCH
             0.83.1 -> 8743a645542b   MATCH
