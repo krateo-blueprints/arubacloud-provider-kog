@@ -105,6 +105,76 @@ jobs:
             exit 1
           fi
 
+  pin-not-retracted:
+    name: pin not retracted
+    # The local gate in scripts/pin_verify.sh only protects whoever RUNS it. A pull
+    # request that edits the pin never executes that script, so a bump to a version the
+    # producer has retracted would pass review with every check green. This is the gate
+    # for the change rather than for the run.
+    #
+    # WHY IT IS CONDITIONAL, which is the whole design. check_retracted.py fetches
+    # oasgen's retracted-versions.yaml and FAILS CLOSED -- a fetch error exits 2, because
+    # "could not read the retraction list" is not evidence that a version is safe. Running
+    # that on every pull request would make every PR in this repo depend on
+    # raw.githubusercontent being reachable, and a gate that goes red for unrelated reasons
+    # is a gate people learn to re-run until it passes.
+    #
+    # So: on a PULL REQUEST it runs only when a file that NAMES the pin changed, which is
+    # exactly when the answer can have changed by our own hand. On PUSH TO MAIN it always
+    # runs, which catches the other direction -- a retraction published AFTER our pin was
+    # set, where nothing in this repo changed at all. A flake on main blocks nobody, so the
+    # fail-closed behaviour costs nothing there.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the base commit, to see whether the pin files changed
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install --quiet pyyaml
+
+      - name: Did this change touch a file that names the pin?
+        id: touched
+        # Context values go through the environment, never interpolated into the script
+        # body: `${{ }}` inside `run:` is how a workflow gets a shell injection, and a
+        # SHA being harmless today is not a reason to write the unsafe form.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+            echo "not a pull request, so checking the pin unconditionally"
+            exit 0
+          fi
+          if [ -z "${BASE_SHA:-}" ]; then
+            # No base to diff against means we cannot tell WHETHER the pin changed, and
+            # the safe answer to that is to check it, not to skip it.
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+            echo "no base SHA available; checking the pin rather than assuming it is untouched"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BASE_SHA"...HEAD || true)"
+          if printf '%s\n' "$changed" | grep -qE '^(\.github/workflows/validate\.yaml|scripts/pin_verify\.sh|scripts/check_retracted\.py)$'; then
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+            echo "a file naming the pin changed in this PR:"
+            printf '%s\n' "$changed" | grep -E '^(\.github/workflows/validate\.yaml|scripts/pin_verify\.sh|scripts/check_retracted\.py)$'
+          else
+            echo "run=no" >> "$GITHUB_OUTPUT"
+            echo "no file naming the pin changed; the producer list is not consulted"
+          fi
+
+      - name: Is ${{ env.OASGEN_VERSION }} retracted by its producer?
+        if: steps.touched.outputs.run == 'yes'
+        # exit 0 not retracted / 1 RETRACTED / 2 could not tell. All three are honoured as
+        # the script defines them: 2 fails the job on purpose.
+        run: python3 -I scripts/check_retracted.py "${OASGEN_VERSION}"
+
   smoke:
     name: kind smoke test
     runs-on: ubuntu-latest
