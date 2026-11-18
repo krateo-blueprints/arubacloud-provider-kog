@@ -183,6 +183,28 @@ deliberately declined to retract for everyone.
 
 #### Known obstacles between 0.67.0 and oasgen's newest
 
+**One thing the bump does NOT change: the Kubernetes floor.** Read from the published
+charts rather than inferred, across the whole path including every version the bump would
+pass through:
+
+```
+0.67.0  kubeVersion: '>=1.36.0-0'      <- the current pin
+0.68.0  kubeVersion: '>=1.36.0-0'
+0.73.0  kubeVersion: '>=1.36.0-0'
+0.76.0  kubeVersion: '>=1.36.0-0'
+0.78.0  kubeVersion: '>=1.36.0-0'
+0.80.0  kubeVersion: '>=1.36.0-0'
+0.82.0  kubeVersion: '>=1.36.0-0'
+0.83.1  kubeVersion: '>=1.36.0-0'      <- oasgen's newest
+```
+
+So the 1.36 floor documented below survives the bump unchanged, and `NODE_IMAGE` in
+`scripts/pin_verify.sh` does not have to move with it. That is worth stating explicitly
+because the floor HAS moved with a pin before -- 0.28.0 raised it to 1.36 and forced the
+node image up in the same commit -- so "the floor is fine" is a measurement here, not an
+assumption.
+
+
 Live as of 2026-11-18; the measurements are in
 [the evolution appendix](oasgen-provider-evolution.md).
 
