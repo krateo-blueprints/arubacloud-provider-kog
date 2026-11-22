@@ -49,14 +49,43 @@
 # tagging it final, so the migration PR here is its first real caller -- which means a
 # regression found here is found before anyone else pins it.
 #
-# WHEN 2.0.0 SHIPS: replace this workflow with a release-oci caller AND delete these five
-# guards in the SAME change. Keeping them afterwards would be dead belt-and-braces that
-# drifts from the shared definition, which is the problem R5 exists to solve.
+# WHEN 2.0.0 SHIPS, THE MIGRATION IS NOT A ONE-FILE SWAP. This workflow does THREE things
+# and release-oci absorbs exactly two of them. Settled with acmp on 2026-11-22 after reading
+# 2.0.0's jobs rather than assuming the scope:
 #
-# WHAT MUST NOT REGRESS, whoever does it: release-notes.yaml stays a TOP-LEVEL caller. A
-# called workflow's permissions are capped at its caller's and custom secrets are not
-# inherited down a nested call, so a nested release-notes could never write a release body
-# -- release-oci documents this as the pattern at its own :109-111.
+#   package-and-push   -> GOES. Replaced by release-oci, and these five guards are deleted
+#                         in the SAME change. Keeping them would be dead belt-and-braces
+#                         drifting from the shared definition, the problem R5 exists to solve.
+#   publish-to-index   -> GOES. Indexing moves INTO release-oci (a `collect` job pulling each
+#                         chart BACK from GHCR at its version, so the index gets the
+#                         registry's exact bytes rather than a repackage with fresh mtimes --
+#                         PUBLISHING.md rule 1 -- then a publish-index job calling
+#                         publish-chart). A caller that ALSO publishes would double-publish.
+#   release assets     -> STAYS, in this repo, as a TOP-LEVEL job. release-oci does no
+#                         GitHub-release asset handling at all (verified: 0 occurrences at
+#                         3892b82c, against a working control).
+#
+# WHAT MUST NOT REGRESS, whoever does it:
+#
+#   * release-notes.yaml stays a TOP-LEVEL caller, and so does the release-assets job. A
+#     called workflow's permissions are capped at its caller's and custom secrets are not
+#     inherited down a nested call, so neither could write a release body from inside
+#     release-oci -- which documents this as the pattern at its own :109-111.
+#   * `hack/publish-release-assets.sh` KEEPS its documented race with release-notes over who
+#     creates the GitHub release, including the run IDs in its comments. One of this repo's
+#     releases won that race "with nothing to spare". Do not simplify it away because it
+#     looks defensive; it is load-bearing and it was measured.
+#   * `index_channel` is REQUIRED and `oci_repo` MUST be set explicitly -- its default is
+#     oci://ghcr.io/krateo-platformops/charts, and this repo publishes to krateo-blueprints.
+#     Taking the default would push a blueprint into the wrong org's namespace.
+#
+# DO NOT PIN A SHA FROM MEMORY. 2.0.0 was merged once as 3892b82c and SUPERSEDED before
+# anyone pinned it, precisely because this scope question had not been answered yet. Take
+# the SHA from acmp at migration time, pin it as `@<sha> # main YYYY-MM-DD` with the
+# COMMIT's date (pinned-uses accepts only `X.Y.Z` or `main YYYY-MM-DD` -- verified at this
+# repo's pinned 1.4.3, not just at main), and note beside it that the form is transitional.
+# acmp tags 2.0.0 on that same commit once this repo's release passes, after which only the
+# comment changes.
 name: release-tag
 
 on:
