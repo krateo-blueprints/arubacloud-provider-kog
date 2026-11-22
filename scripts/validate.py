@@ -130,7 +130,7 @@ def main():
     verify_ga_chain_shape(errors)
     verify_no_return_in_finally(errors)
     verify_create_pending_predicate(errors)
-    verify_identifiers_exist_in_response_schema(errors)
+    verify_identifiers_resolve_on_both_sides(errors)
     verify_maturity_counts_match(errors)
     verify_parity_page_names_every_kind(errors)
     verify_status_fields_exist_in_response_schema(errors)
@@ -1344,8 +1344,40 @@ IDENTIFIER_NOT_IN_RESPONSE = {
 }
 
 
-def verify_identifiers_exist_in_response_schema(errors):
-    """Every declared identifier must be findable at the item root of the observe response.
+def verify_identifiers_resolve_on_both_sides(errors):
+    """Every declared identifier must resolve on BOTH sides of the match, not just the response.
+
+    THIS GATE CHECKED ONE SIDE UNTIL 2026-11-22, and the half it missed is the half that
+    produces the bug. oasgen-provider traced the mechanism: `identifiers` is ONE path applied
+    to BOTH sides. `isItemMatch` resolves it against the response item at arbitrary depth;
+    `isInResource` (clienttools.go:204) then resolves THE SAME PATH against `spec.<path>` and
+    `status.<path>` on the CR. A path that resolves in the response and not on the CR fails to
+    match, findby answers "absent" for a resource that is present, and a create follows.
+
+    So the invariant is AGREEMENT, not depth -- which is also why 28 kinds using
+    `metadata.name` work: the item has `metadata.name` and the CR has `spec.metadata.name`.
+    When this gate only read the response, "35 of 36 clean" verified one side and INFERRED
+    the other, and the sentence I wrote about why the 30 others work was an explanation my own
+    evidence could not distinguish from a wrong one.
+
+    THE CR SIDE, derived offline: a CR's spec comes from the create/update/dispatch REQUEST
+    body, minus `excludedSpecFields`, restricted by `includedSpecFields` when set; its status
+    carries `additionalStatusFields`. So an identifier can be unreachable on the CR side four
+    ways -- absent from the request body, removed by excludedSpecFields, omitted by
+    includedSpecFields, or (for the no-create case below) never derived at all.
+
+    THE NO-CREATE CASE IS NOT A DEFECT, and getting that right needed evidence rather than
+    reasoning. A kind declaring only findby+get has no request body, so by the rule above its
+    identifier would look unreachable -- LoadBalancer read exactly that way on the first run
+    of this check. It is a FALSE POSITIVE: oasgen derives such a kind's spec from the
+    identifiers themselves, which is what a findby-only kind needs. Measured, not assumed --
+    `tests/compositions/no-create-rollup` sets `spec.metadata.name` on a LoadBalancer and a
+    real apiserver ADMITTED it during the composition probe run, reaching
+    Ready=False/NoCreateVerbDeclared, which admission is a precondition for. The generated
+    sample agrees (`samples/network/loadbalancer.yaml`), but the sample is written by our own
+    generator, so it corroborates rather than proves.
+
+    Every declared identifier must also be findable at the item root of the observe response.
 
     WHY THIS IS A DIFFERENT GATE FROM THE STATUS-FIELD ONE. The sibling check above proves
     additionalStatusFields paths exist in the response. Identifiers were never checked, and
@@ -1425,7 +1457,7 @@ def verify_identifiers_exist_in_response_schema(errors):
                 return (list(content.values())[0] or {}).get("schema") or {}
         return None
 
-    checked, offenders = 0, {}
+    checked, offenders, cr_offenders = 0, {}, {}
     for path in sorted(glob.glob("restdefinitions/**/*.yaml", recursive=True)):
         d = yaml.safe_load(open(path))
         if not d or d.get("kind") != "RestDefinition":
@@ -1477,6 +1509,68 @@ def verify_identifiers_exist_in_response_schema(errors):
         if missing:
             offenders[kind] = missing
 
+        # --- THE CR SIDE: the same path, resolved against spec/status instead.
+        excluded = set(res.get("excludedSpecFields") or [])
+        included = res.get("includedSpecFields")
+        asf = set(res.get("additionalStatusFields") or [])
+        req_paths, saw_request = set(), False
+        for action in ("create", "update", "dispatch"):
+            rv = verbs.get(action)
+            if not rv:
+                continue
+            roas = rv.get("oasPath") or spec.get("oasPath") or ""
+            rp = roas[len("configmap://"):].split("/") if roas.startswith("configmap://") else []
+            if len(rp) != 3 or rp[1] not in cm_by_name or rp[2] not in cm_by_name[rp[1]]:
+                errors.append("%s: cannot resolve the %s verb's oasPath %r, so the CR side of "
+                              "its identifiers was NOT checked" % (kind, action, roas))
+                continue
+            try:
+                rdoc = json.loads(cm_by_name[rp[1]][rp[2]])
+            except ValueError as exc:
+                errors.append("%s: the %s verb's document will not parse (%s), so the CR side "
+                              "was NOT checked" % (kind, action, exc))
+                continue
+            rop = ((rdoc.get("paths") or {}).get(rv.get("path")) or {}).get(
+                (rv.get("method") or "post").lower())
+            if not rop:
+                errors.append("%s: the %s verb's %s %s is not in its document, so the CR side "
+                              "would have been silently empty"
+                              % (kind, action, (rv.get("method") or "?").upper(), rv.get("path")))
+                continue
+            rb = deref(rdoc, (rop.get("requestBody") or {})) or {}
+            content = rb.get("content") or {}
+            bs = None
+            for ct in ("application/json", "application/json; charset=utf-8", "*/*"):
+                if ct in content:
+                    bs = (content[ct] or {}).get("schema") or {}
+                    break
+            if bs is None and content:
+                bs = (list(content.values())[0] or {}).get("schema") or {}
+            if bs is None:
+                errors.append("%s: the %s verb declares no JSON request body, so the CR side "
+                              "would have been silently empty" % (kind, action))
+                continue
+            saw_request = True
+            req_paths |= set(walk(rdoc, bs))
+
+        if saw_request:
+            unreachable = []
+            for i in ids:
+                if i in asf:
+                    continue                                   # surfaced into status
+                if i not in req_paths:
+                    unreachable.append((i, "absent from the request body"))
+                elif any(i == e or i.startswith(e + ".") for e in excluded):
+                    unreachable.append((i, "removed by excludedSpecFields"))
+                elif included is not None and not any(
+                        i == x or i.startswith(str(x) + ".") for x in included):
+                    unreachable.append((i, "omitted by includedSpecFields"))
+            if unreachable:
+                cr_offenders[kind] = unreachable
+        # saw_request False == a findby-only kind, whose spec oasgen derives from the
+        # identifiers themselves. Measured as admissible on a real apiserver; see the
+        # docstring. Deliberately not reported.
+
     for kind, missing in sorted(offenders.items()):
         if kind in IDENTIFIER_NOT_IN_RESPONSE:
             continue
@@ -1488,7 +1582,22 @@ def verify_identifiers_exist_in_response_schema(errors):
             "(e.g. metadata.name), so the fix is usually a path rather than a bare key. "
             "If this is genuinely intended, add it to IDENTIFIER_NOT_IN_RESPONSE with the "
             "measured reason." % (kind, missing))
-    for kind in sorted(set(IDENTIFIER_NOT_IN_RESPONSE) - set(offenders)):
+    for kind, items in sorted(cr_offenders.items()):
+        if kind in IDENTIFIER_NOT_IN_RESPONSE:
+            continue
+        errors.append(
+            "%s: identifier(s) %s do NOT resolve on the CR side (spec/status). "
+            # NOT "resolve in the response but not on the CR side": the two arms are
+            # reported independently, and a kind can fail BOTH -- AlertRule does. Asserting
+            # the response side resolved would send the reader after the wrong half.
+            
+            "`identifiers` is one path applied to both sides -- isInResource looks up "
+            "`spec.<path>` and `status.<path>` -- so the match fails, findby answers "
+            "'absent' for a resource that is present, and a CREATE follows. Put the path in "
+            "the request body, stop excluding it, or declare it in additionalStatusFields."
+            % (kind, items))
+
+    for kind in sorted(set(IDENTIFIER_NOT_IN_RESPONSE) - set(offenders) - set(cr_offenders)):
         errors.append(
             "%s is listed in IDENTIFIER_NOT_IN_RESPONSE but its identifiers now DO resolve "
             "at the item root (or the kind is gone). Remove the entry -- a stale allowlist "
@@ -1500,9 +1609,9 @@ def verify_identifiers_exist_in_response_schema(errors):
                       "There were 36 definitions on 2026-11-18, so zero means the walk "
                       "broke rather than that the repository changed.")
     else:
-        print("Checked identifiers against the observe response schema across %d kind(s) "
-              "(%d allowlisted with a measured reason)"
-              % (checked, len(IDENTIFIER_NOT_IN_RESPONSE)))
+        print("Checked identifiers on BOTH sides of the match across %d kind(s): the "
+              "observe response and the CR's spec/status (%d allowlisted with a measured "
+              "reason)" % (checked, len(IDENTIFIER_NOT_IN_RESPONSE)))
 
 
 def find_helm():
