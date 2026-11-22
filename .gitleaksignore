@@ -39,10 +39,15 @@
 # no Aruba token and no client credential reachable from here, and every route to one needs
 # the credential only the account owner holds.
 #
-# SO THIS ENTRY IS PROVISIONAL. The moment a credential is available, GET that user and
-# expect a 404, and check the same password is not used by any other user or service. If
-# either check fails, ROTATE FIRST and keep the fingerprint afterwards. Replace this block
-# with the measured result -- a date, the status code, and what was queried -- rather than
+# REUSE: ANSWERED. Diego confirmed on 2026-11-22 that this password was only ever used for
+# this test user -- not another fixture, not a real database user, not a password manager
+# entry, not another service. Recorded as a stated fact from the account owner, not as an
+# inference from the repository, because no grep of this repo could have established it.
+#
+# STILL PROVISIONAL ON ONE POINT: that the DBaaS user itself is gone. The check is agreed
+# and queued -- at the next credential bootstrap, GET that user and expect a 404. If it
+# EXISTS, stop and rotate before anything else; the fingerprint stays either way. Replace
+# this block with the measured result -- date, status code, what was queried -- rather than
 # deleting it. Raised by acmp, whose point was that "recorded but unverified" is not a
 # resting state on a public repository, and who was right.
 eafe2c96ca8134c33c8489ec31dcdd354bf30255:tests/ga/chains/database.yaml:generic-api-key:72
