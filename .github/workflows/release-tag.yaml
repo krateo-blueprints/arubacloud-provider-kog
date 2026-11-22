@@ -100,13 +100,28 @@
 #     published into another org's namespace. Set it anyway; do not rely on the refusal, and
 #     note it does NOT cover `index_channel: none`, where no channel check runs.
 #
-# DO NOT PIN A SHA FROM MEMORY. 2.0.0 was merged once as 3892b82c and SUPERSEDED before
-# anyone pinned it, precisely because this scope question had not been answered yet. Take
-# the SHA from acmp at migration time, pin it as `@<sha> # main YYYY-MM-DD` with the
-# COMMIT's date (pinned-uses accepts only `X.Y.Z` or `main YYYY-MM-DD` -- verified at this
-# repo's pinned 1.4.3, not just at main), and note beside it that the form is transitional.
-# acmp tags 2.0.0 on that same commit once this repo's release passes, after which only the
-# comment changes.
+# DO NOT PIN A SHA FROM MEMORY. 2.0.0 was superseded TWICE in one evening before anyone
+# pinned it:
+#
+#   3892b82c  superseded because the indexing scope question was still open -- release-oci
+#             gated against the index while callers still had to publish themselves.
+#   b030d3f9  ANNOUNCED WITH MAIN'S CI GREEN ON ALL 7, and still failed `package-and-push`
+#             at JOB SETUP for every caller: it staged krateo-blueprints/charts as a step
+#             action and a dangling-symlink test fixture broke the archive unpacking.
+#             Fixed by pinning charts 1.9.3 (1.9.2 refuses any tracked symlink).
+#
+# THE SECOND ONE IS THE LESSON, and it is not "SHAs move": a shared workflow's OWN CI can be
+# fully green while every caller fails before a single step of it runs, because action
+# staging happens in the CALLER's job and the workflow's CI never exercises that path. So
+# "main CI is green" is not evidence that a caller will start. A caller DRY RUN is, which is
+# how it was actually caught (alert-provider 45083740900).
+#
+# Take the SHA at migration time, pin it as `@<sha> # main YYYY-MM-DD` with the COMMIT's
+# date -- not today's; the current one was committed 2026-11-22T23:33:37Z and read on the
+# 23rd (pinned-uses accepts only `X.Y.Z` or `main YYYY-MM-DD`, verified at this repo's
+# pinned 1.4.3 and not just at main) -- and note beside it that the form is transitional.
+# RUN A DISPATCH DRY RUN BEFORE THE TAG. acmp tags 2.0.0 on that same commit once this
+# repo's release passes, after which only the comment changes.
 name: release-tag
 
 on:
