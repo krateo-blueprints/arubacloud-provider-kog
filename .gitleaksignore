@@ -27,8 +27,22 @@
 # NOT DONE, deliberately: no history rewrite. It would invalidate every SHA in a repo with
 # 42 merged PRs and break pins other work quotes, to remove a throwaway test password.
 #
-# NOT VERIFIED BY ME: that the corresponding DBaaS user is deleted on the Aruba side. The
-# chain's teardown verifies a 404 for it, and `docs/coverage.md` records DatabaseUser's
-# delete as proven live -- but I could not re-confirm it in this session, so if that user
-# were somehow still alive the password should be rotated rather than accepted.
+# THIS REPOSITORY IS PUBLIC (verified: visibility=PUBLIC). So the base64 password, and the
+# plaintext that sat beside it in docs/live-cluster-test.md, are readable by anyone,
+# permanently, and no fingerprint here changes that. Accepting the finding is a statement
+# that the credential is DEAD -- not that it is hidden.
+#
+# OPEN, AND THE ONE THING THAT MAKES THIS SAFE OR NOT: whether the DBaaS user the password
+# belongs to still exists on the Aruba side. The chain's teardown verifies a 404 for it and
+# docs/coverage.md records DatabaseUser's delete as proven live -- but that is evidence
+# about PAST RUNS, not a reading taken now. It could not be taken in this session: there is
+# no Aruba token and no client credential reachable from here, and every route to one needs
+# the credential only the account owner holds.
+#
+# SO THIS ENTRY IS PROVISIONAL. The moment a credential is available, GET that user and
+# expect a 404, and check the same password is not used by any other user or service. If
+# either check fails, ROTATE FIRST and keep the fingerprint afterwards. Replace this block
+# with the measured result -- a date, the status code, and what was queried -- rather than
+# deleting it. Raised by acmp, whose point was that "recorded but unverified" is not a
+# resting state on a public repository, and who was right.
 eafe2c96ca8134c33c8489ec31dcdd354bf30255:tests/ga/chains/database.yaml:generic-api-key:72
