@@ -9,7 +9,7 @@ spec:
   resource:
     kind: AlertRule
     identifiers:
-    - name
+    - metadata.name
     additionalStatusFields:
     - id
     excludedSpecFields:
@@ -23,6 +23,9 @@ spec:
     - action: findby
       method: GET
       path: /projects/{projectId}/providers/Aruba.Insight/alertRules
+      fieldMapping:
+      - inResponse: request.name
+        inCustomResource: spec.metadata.name
     - action: get
       method: GET
       path: /projects/{projectId}/providers/Aruba.Insight/alertRules/{alertRulesId}

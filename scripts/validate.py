@@ -1301,47 +1301,49 @@ def verify_create_pending_predicate(errors):
 # response. Every entry must carry the measured reason and the fix, and the gate below
 # errors if an entry stops applying -- a stale allowlist exempts the next kind that breaks
 # under a comment about a different one.
-IDENTIFIER_NOT_IN_RESPONSE = {
-    "AlertRule": (
-        "declares identifiers: ['name'], and `name` does not exist at the item root of "
-        "either observe response. The GET response echoes the original request under a "
-        "`request` key, so the only `name` is at `request.name`; the findby's is at "
-        "`values[].request.name`. MEASURED 2026-11-18 by an offline walk of the vendored "
-        "document, NOT by a run -- AlertRule is one of four kinds no GA chain covers, so "
-        "nothing has ever exercised it.\n\n"
-        "DO NOT 'FIX' THIS WITH `identifiers: ['request.name']`. That was this entry's "
-        "first suggestion and it is WRONG in the dangerous direction -- it would CAUSE the "
-        "failure described above rather than avoid it. oasgen-provider traced the "
-        "mechanism: `identifiers` is ONE path applied to BOTH sides. The response lookup "
-        "(`isItemMatch` -> `NestedFieldNoCopy`) is depth-agnostic and WOULD find "
-        "`values[].request.name`; the CR lookup (`isInResource`, clienttools.go:204) then "
-        "asks for `spec.request.name` AND `status.request.name`, and this CR has neither. "
-        "No match, findby answers absent, a duplicate is created.\n\n"
-        "AND THAT EXPLAINS WHY THE OTHER 30 WORK: `metadata.name` succeeds on 28 kinds "
-        "because the response item and the CR AGREE on the path (item `metadata.name`, CR "
-        "`spec.metadata.name`). Depth was never the constraint -- agreement was. "
-        "AlertRule's request envelope and response share no top-level key at all, so NO "
-        "single path can satisfy both sides and `identifiers` cannot express it at any "
-        "depth.\n\n"
-        "AND NOTHING IN THE CRD CAN EXPRESS IT TODAY -- so do not go looking for the "
-        "configuration that fixes this, because there isn't one. `verbsDescription[]."
-        "fieldMapping` is the only mechanism with SEPARATE destinations (its items carry "
-        "`inResponse` and `inCustomResource`, measured on the served CRD at 0.84.0, while "
-        "`requestFieldMapping` has no response direction at all) -- but oasgen-provider "
-        "traced the wiring and the response direction NEVER REACHES THE COMPARISON: "
-        "builder.go:35 applies only request-direction entries, and the client struct "
-        "carries IdentifierFields, IdentifiersMatchPolicy and Resource with no mapping of "
-        "any kind, so `isItemMatch` has nothing to consult. Their own `isInResource` doc "
-        "comment carries a TODO about adding a ResponseFieldMapping 'possibly in future "
-        "versions'. It is a GAP, not a misconfiguration of ours.\n\n"
-        "Filed upstream as oasgen-provider#845, deliberately titled by the SYMPTOM -- "
-        "'findby cannot match a response whose identifier path differs from the CR's, and "
-        "the obvious fix creates duplicates' -- because a mechanism-titled issue is "
-        "unfindable by whoever hits this next. A TODO inside the function is invisible to "
-        "anyone who has not already found the function, and finding it is the hard part. "
-        "REMOVE THIS ENTRY when #845 ships, and re-run the kind through a chain before "
-        "trusting it -- AlertRule has still never been run."),
-}
+#
+# IT IS EMPTY, as of 2026-11-22. AlertRule was the only entry and it has been FIXED, in
+# `restdefinitions/metering/alertrule.yaml`, by the configuration this entry used to say
+# did not exist.
+#
+# RETRACTED, AND THE REASONING LEFT STANDING SO THE MISTAKE IS LEGIBLE. The entry said:
+#
+#   "AND NOTHING IN THE CRD CAN EXPRESS IT TODAY -- so do not go looking for the
+#    configuration that fixes this, because there isn't one. [...] the response direction
+#    NEVER REACHES THE COMPARISON: builder.go:35 applies only request-direction entries,
+#    and the client struct carries IdentifierFields, IdentifiersMatchPolicy and Resource
+#    with no mapping of any kind, so isItemMatch has nothing to consult."
+#
+# Every clause about the client struct is true. The CONCLUSION is false, and it was the
+# load-bearing one. Measured at tag 0.84.0:
+#
+#   * builder.go:340 does skip inResponse entries -- with the comment "response-direction
+#     (inResponse) entry, handled elsewhere". I read "handled elsewhere" and concluded
+#     "nowhere". The comment says the opposite of what I took from it.
+#   * normalizeItems (restclient.go:698) is elsewhere. It calls
+#     fieldmapping.NormalizeResponseBody on EVERY findby item, and the error it raises
+#     settles the ordering: "normalizing findby item %d before matching".
+#   * So the comparison never consults a mapping -- and never needs to. The ITEM is
+#     rewritten before isItemMatch is called on it.
+#   * normalizeItems exists FOR THIS BUG. Its docstring describes GitHub returning
+#     head/base as objects where spec.head is a string, and spells out the consequence in
+#     our own words: such a findby "does not fail, it re-creates a resource that already
+#     exists" (#145).
+#
+# HOW THE ERROR WAS MADE, because it is the reusable part: I did not read
+# rest-dynamic-controller. I took a peer's wiring trace, which was sincere and partly
+# right, and published its conclusion as measurement. The correction also did not arrive
+# clean -- I was then told the mapping writes into the CR's `status`, which is wrong too:
+# bodyRelativePath (fieldmapping.go:269) STRIPS the leading `spec.`/`status.`, the write
+# lands on the item, and isInResource reads the live CR. A mapping fixes the RESPONSE side
+# only. Three accounts, two of them wrong, and the file that settles it was readable the
+# whole time -- see [[written-evidence-goes-unconsulted]].
+#
+# WHAT IS STILL UNPROVEN: that AlertRule now matches. The relocation is derived from
+# source, not observed -- `Aruba.Insight/alertRules` 404s on this account, so findby never
+# reaches the matcher. The gate below checks the declaration is coherent (the mapping's
+# source exists, both sides name one agreed path); it cannot check the runtime.
+IDENTIFIER_NOT_IN_RESPONSE = {}
 
 
 def verify_identifiers_resolve_on_both_sides(errors):
@@ -1392,8 +1394,20 @@ def verify_identifiers_resolve_on_both_sides(errors):
     or response schema that will not resolve is its own error naming the stage, never a
     missing-identifier report and never silence.
 
-    Measured when written: 35 of 36 kinds locate every identifier at the item root, 0 were
-    skipped, and the one exception is in the allowlist above with its reason.
+    THE RESPONSE SIDE IS NOT JUST THE RAW SCHEMA, corrected 2026-11-22. A findby verb's
+    response-direction `fieldMapping` relocates a path onto each item BEFORE isItemMatch
+    runs (normalizeItems, restclient.go:698), so an identifier absent from the document can
+    still resolve -- and this check now follows that relocation instead of denying it
+    exists. It also verifies the mapping's SOURCE is present, because a mapping whose
+    source is absent is a silent no-op that leaves the identifier unresolved while looking
+    configured. See the retraction above IDENTIFIER_NOT_IN_RESPONSE.
+
+    Measured 2026-11-22: 36 of 36 kinds resolve every identifier on BOTH sides, 0 were
+    skipped, and the allowlist is empty. AlertRule was the last entry and is now fixed by
+    declaration, not exempted. Four controls, run on a scratch copy: mapping removed,
+    caught; mapping source absent, caught by its own error; mapping destination pointed
+    elsewhere, caught; the previously shipped `identifiers: ['name']` restored, caught on
+    BOTH arms -- which is the pre-fix state, reproduced.
     """
     cm_by_name = {}
     for f in sorted(glob.glob("configmaps/*.yaml")):
@@ -1505,7 +1519,57 @@ def verify_identifiers_resolve_on_both_sides(errors):
             if w and (w in paths or any(p.startswith(w + "[].") for p in paths)):
                 roots += [w + "[].", w + "."]
         checked += 1
-        missing = [i for i in ids if not any((r + i) in paths for r in roots)]
+
+        # A RESPONSE-DIRECTION fieldMapping RELOCATES a path BEFORE the match, so the raw
+        # response schema is not the last word on the response side.
+        #
+        # THIS CORRECTS A PUBLISHED CLAIM OF MINE. I wrote that the response direction
+        # "never reaches the comparison" and told the reader not to look for the
+        # configuration that fixes it. Measured at tag 0.84.0, that is wrong:
+        #   * builder.go:340 skips inResponse entries with the comment "handled elsewhere"
+        #     -- which I read as "dropped". It is not.
+        #   * ELSEWHERE IS normalizeItems (restclient.go:698). It runs
+        #     fieldmapping.NormalizeResponseBody over EVERY findby item, and its own error
+        #     string fixes the ordering beyond doubt: "normalizing findby item %d BEFORE
+        #     matching". So isItemMatch sees the moved path, not the original.
+        #   * Its docstring names the motivating bug (#145) and it is OUR failure shape:
+        #     a findby written against a shape-mismatched key "does not fail, it re-creates
+        #     a resource that already exists."
+        #   * bodyRelativePath (fieldmapping.go:269) strips a leading `spec.`/`status.` from
+        #     inCustomResource, so the destination lands at a BARE path on the item.
+        #
+        # WHAT IT STILL CANNOT DO -- and this half was also stated wrongly to me: it does
+        # NOT write to the CR. The write lands in the item/observed body; isInResource
+        # (clienttools.go:204) reads the live CR object, and clienttools.go does not even
+        # import fieldmapping. So a mapping can make the RESPONSE agree with the CR; it can
+        # never give the CR a path it lacks. Both arms below still have to pass.
+        mapped = {}
+        for m in (obs.get("fieldMapping") or []):
+            if not isinstance(m, dict):
+                continue
+            src, dst = m.get("inResponse"), m.get("inCustomResource")
+            if not src or not dst:
+                continue                      # request-direction, or an incomplete pair
+            head, _, tail = dst.partition(".")
+            mapped[tail if head in ("spec", "status") and tail else dst] = src
+
+        missing = []
+        for i in ids:
+            if any((r + i) in paths for r in roots):
+                continue
+            src = mapped.get(i)
+            if src is None:
+                missing.append(i)
+                continue
+            # The relocation only fires if its SOURCE is really in the response. A mapping
+            # whose source is absent is silently a no-op, which would leave the identifier
+            # unresolved while LOOKING configured -- the worst of the three states.
+            if not any((r + src) in paths for r in roots):
+                errors.append(
+                    "%s: identifier %r is mapped from %r by the observe verb's "
+                    "fieldMapping, but %r is not in the response schema either, so the "
+                    "relocation never fires and the identifier stays unresolved."
+                    % (kind, i, src, src))
         if missing:
             offenders[kind] = missing
 

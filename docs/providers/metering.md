@@ -16,7 +16,7 @@ timestamp: 2026-09-28T00:00:00Z
 
 | Kind | Verbs | Identifier(s) | Delegation |
 |------|-------|---------------|------------|
-| `AlertRule` | findby, get, create, update, delete | `name` | — |
+| `AlertRule` | findby, get, create, update, delete | `metadata.name` | — |
 
 
 ## AlertRule
