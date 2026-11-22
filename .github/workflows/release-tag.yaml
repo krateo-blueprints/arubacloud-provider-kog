@@ -12,8 +12,16 @@
 # advisory only because release-oci was missing guards this file has, and those are being
 # closed rather than exempted.
 #
-# WHAT GATES THE SWAP: release-oci 2.0.0. Reviewed against this file's five pre-push checks
-# at PR #70's head (441a8da4); two were already covered and three were not:
+# WHAT GATES THE SWAP: release-oci 2.0.0, tracked as krateo-platformops/.github issues
+# #71-#73. NOT 1.1.0, which is already merged (f6185ef0a816, 2026-11-22) and already carries
+# the two criteria this file's existence rested on -- a structural preflight-before-push
+# (package-and-push `needs:` the preflight job, so it cannot be raced by step order, which
+# is stronger than what this file does) and the top-level release-notes pattern documented
+# at its own :109-111. Verified at that SHA, with a control: release-preflight appears 6
+# times, `jobs:` once, and CHARTS_PUBLISH_TOKEN still 0 -- which is why 1.1.0 is not enough.
+#
+# Reviewed against this file's five pre-push checks; two were already covered and three
+# were not:
 #
 #   1. no pre-push check that the INDEX-publishing credential exists -- the push uses
 #      GITHUB_TOKEN and indexing is downstream, so "pushed but never indexed" stayed
@@ -33,6 +41,13 @@
 #
 # A green token check proves PRESENCE AND SHAPE, NOT VALIDITY: an expired or wrongly scoped
 # token still fails at index time. That limit applies to this file's checks too.
+#
+# THIS REPO IS THE FIRST 2.0.0 ADOPTER, by agreement with acmp on 2026-11-22: one chart, no
+# consumers installing it (installer confirmed with three controlled probes), and a reviewer
+# who had just read the workflow line by line. A breaking release is better tested where the
+# blast radius is a chart nobody installs. acmp sends the 2.0.0 PRE-RELEASE SHA before
+# tagging it final, so the migration PR here is its first real caller -- which means a
+# regression found here is found before anyone else pins it.
 #
 # WHEN 2.0.0 SHIPS: replace this workflow with a release-oci caller AND delete these five
 # guards in the SAME change. Keeping them afterwards would be dead belt-and-braces that
