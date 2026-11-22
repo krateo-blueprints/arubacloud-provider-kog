@@ -75,9 +75,14 @@
 #     creates the GitHub release, including the run IDs in its comments. One of this repo's
 #     releases won that race "with nothing to spare". Do not simplify it away because it
 #     looks defensive; it is load-bearing and it was measured.
-#   * `index_channel` is REQUIRED and `oci_repo` MUST be set explicitly -- its default is
-#     oci://ghcr.io/krateo-platformops/charts, and this repo publishes to krateo-blueprints.
-#     Taking the default would push a blueprint into the wrong org's namespace.
+#   * `index_channel` is REQUIRED, and `oci_repo` MUST be set explicitly: its default is
+#     oci://ghcr.io/krateo-platformops/charts while this repo publishes to krateo-blueprints.
+#     SINCE 2026-11-22 THIS IS REFUSED RATHER THAN SILENT -- release-oci's index-preflight
+#     rejects `index_channel: blueprints` or `pages` unless `oci_repo` is exactly
+#     oci://ghcr.io/krateo-blueprints/charts, compared AS WRITTEN so an old-org spelling is
+#     refused too. So the consequence of forgetting is a failed preflight, not a blueprint
+#     published into another org's namespace. Set it anyway; do not rely on the refusal, and
+#     note it does NOT cover `index_channel: none`, where no channel check runs.
 #
 # DO NOT PIN A SHA FROM MEMORY. 2.0.0 was merged once as 3892b82c and SUPERSEDED before
 # anyone pinned it, precisely because this scope question had not been answered yet. Take
