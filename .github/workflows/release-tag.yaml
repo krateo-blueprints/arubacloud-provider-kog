@@ -1,6 +1,22 @@
 # Packages every chart in this repo and publishes each to the GitHub Container Registry as an OCI
 # Helm artifact on every semver tag. Shape-agnostic: it discovers charts by locating each Chart.yaml
-# (skipping vendored subcharts under charts/), so it works regardless of the repo's directory layout.
+# (skipping vendored subcharts under charts/, and anything under tests/), so it works regardless of
+# the repo's directory layout.
+#
+# `tests/` IS PRUNED BECAUSE A CHART THERE MUST NEVER SHIP. tests/compositions/no-create-rollup is a
+# probe whose own header says "PROBE ONLY -- NEVER SHIPPED, NEVER PUBLISHED". Without this prune the
+# channel guard below DISCOVERS it, finds values.schema.json but no CompositionDefinition, and fails
+# the release with "Not every chart here belongs in `blueprints`" -- correct behaviour from a guard
+# that never anticipated a chart which must not ship at all.
+#
+# Nothing was ever published: the probe chart was added 2026-11-18 and the newest tag is 0.4.0 from
+# 2026-11-14 (`git merge-base --is-ancestor` confirms it postdates it). The next tag push would have
+# been the first to see it, and would have failed rather than published -- the better of the two
+# failures, and still a blocked release.
+#
+# release-oci 2.0.0 prunes a WIDER list (examples, fixtures, testdata, test, tests, e2e, sample,
+# samples, docs, node_modules), so the migration inherits this and more. This narrower fix exists so
+# the repo does not carry a known-broken next release while that migration waits.
 #
 # Charts opt into versioning with the CHART_VERSION placeholder in Chart.yaml, which the git tag
 # replaces at publish time. Pushing tag "0.1.0" publishes each chart <name> as:
@@ -161,7 +177,8 @@ jobs:
             export CD_MANIFEST="${RUNNER_TEMP}/cd-manifest"
             : > "${CD_MANIFEST}"
           find . -type f -name compositiondefinition.yaml \
-                 -not -path '*/charts/*' -not -path '*/examples/*' -not -path '*/samples/*' -print0 \
+                 -not -path '*/charts/*' -not -path '*/examples/*' -not -path '*/samples/*' \
+                 -not -path '*/tests/*' -print0 \
             | while IFS= read -r -d '' cd; do
                 sed -i "s/CHART_VERSION/${VERSION}/g" "$cd"; echo "stamped $cd -> ${VERSION}"
                   printf '%s\0' "$cd" >> "${CD_MANIFEST}"
@@ -239,13 +256,13 @@ jobs:
             if [ ! -f "$dir/compositiondefinition.yaml" ] && [ ! -f "$(dirname "$dir")/compositiondefinition.yaml" ]; then
               echo "::error::${name}: no CompositionDefinition in the chart dir or its parent"; bad=1
             fi
-          done < <(find . -type f -name Chart.yaml -not -path '*/charts/*' -print0)
+          done < <(find . -type f -name Chart.yaml -not -path '*/charts/*' -not -path '*/tests/*' -print0)
           # A page-set is a different channel, not a defective blueprint, so say so.
           while IFS= read -r -d '' cf; do
             grep -q "krateo.io/kind:[[:space:]]*page-set" "$cf" && {
               echo "::error::$(dirname "$cf") is annotated page-set, which belongs in the"
               echo "::error::\`pages\` channel, not \`blueprints\`."; bad=1; }
-          done < <(find . -type f -name Chart.yaml -not -path '*/charts/*' -print0)
+          done < <(find . -type f -name Chart.yaml -not -path '*/charts/*' -not -path '*/tests/*' -print0)
           [ "$bad" = "0" ] || {
             echo "::error::Not every chart here belongs in \`blueprints\`. This caller passes"
             echo "::error::ONE channel for all its charts, so split the release by channel"
@@ -276,7 +293,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p charts-dist
-          find . -type f -name Chart.yaml -not -path '*/charts/*' -print0 | while IFS= read -r -d '' cf; do
+          find . -type f -name Chart.yaml -not -path '*/charts/*' -not -path '*/tests/*' -print0 | while IFS= read -r -d '' cf; do
             dir=$(dirname "$cf")
             name=$(awk '/^name:/{print $2; exit}' "$cf")
             echo "::group::${name} (${dir})"
