@@ -178,7 +178,7 @@ TIERS = {
         "told the reader not to look for a configuration that fixes it. The configuration "
         "exists. A findby verb's response-direction `fieldMapping` relocates a path onto "
         "every item **before** the match — `normalizeItems` "
-        "([rest-dynamic-controller restclient.go:698](https://github.com/krateo-platformops/oasgen-provider), "
+        "([rest-dynamic-controller restclient.go:698](https://github.com/krateo-platformops/oasgen-provider/blob/0.84.0/go/rest-dynamic-controller/internal/tools/client/restclient.go#L698), "
         "tag 0.84.0) runs `NormalizeResponseBody` over each item and its own error names "
         "the ordering, *\"normalizing findby item N before matching\"* — and "
         "`bodyRelativePath` strips the leading `spec.`, so the value lands at the bare "
@@ -197,8 +197,12 @@ TIERS = {
         "0.84.0, and `identifiers` is immutable on the served CRD, so applying it needs "
         "the RestDefinition recreated. "
         "[oasgen-provider#845](https://github.com/krateo-platformops/oasgen-provider/issues/845) "
-        "is to be reframed or closed: it was filed as a gap on the strength of the "
-        "retracted sentence",
+        "was **closed as not-planned** on 2026-11-22, citing this fix — it had been filed "
+        "as an upstream gap on the strength of the retracted sentence, and shipping "
+        "machinery for it would have been machinery for my mistake. The residue was "
+        "real and is upstream: `builder.go`'s *\"handled elsewhere\"* named no "
+        "destination, and that comment now names the file, the function and what it "
+        "does **not** do",
     ),
     ("network", "SecurityGroup"): (
         "ga",
