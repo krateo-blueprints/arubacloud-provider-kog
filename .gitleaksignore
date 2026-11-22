@@ -1,0 +1,34 @@
+# One accepted finding. Everything else must fail the scan.
+#
+# WHY A COMMIT FINGERPRINT AND NOT A PATH ALLOWLIST. `security.yml` runs gitleaks in git
+# mode with fetch-depth 0, which reports a secret ONCE, at the commit that introduced it,
+# not in every descendant. A commit is immutable, so this fingerprint can never drift --
+# unlike a fingerprint for a finding at HEAD, which stops matching when the line moves.
+# A path allowlist would blind the scanner to every FUTURE secret in that file, forever;
+# this accepts exactly one known finding and nothing else. (Mechanism confirmed by acmp,
+# who owns the shared workflow; the workflow's own error text pointed the other way and is
+# being corrected.)
+#
+# WHAT IT IS: a base64 password for the DatabaseUser that
+# `tests/ga/chains/database.yaml` creates and deletes inside a single GA chain run. Not an
+# account credential, and not a credential for anything that outlives the run.
+#
+# FIXED FORWARD IN 3e68515, not suppressed. The chain now takes the value from the
+# operator's shell as `${DB_USER_PASSWORD_B64}`, declared empty so the run refuses rather
+# than quietly using a credential out of git. `vpn.yaml`'s `${PSK_SECRET}` was already
+# doing this correctly; database.yaml was the one outlier.
+#
+# A SECOND COPY WAS FOUND BY LOOKING FOR IT. The same value, with its plaintext beside it,
+# was also in `docs/live-cluster-test.md:966` -- which the scanner did NOT report, because
+# it reports only the introducing commit and that doc copy came later. Fixing the file the
+# scan named would have left the value in the repo. Anyone accepting a finding here should
+# grep the working tree for the value first; that check is what turned one fix into two.
+#
+# NOT DONE, deliberately: no history rewrite. It would invalidate every SHA in a repo with
+# 42 merged PRs and break pins other work quotes, to remove a throwaway test password.
+#
+# NOT VERIFIED BY ME: that the corresponding DBaaS user is deleted on the Aruba side. The
+# chain's teardown verifies a 404 for it, and `docs/coverage.md` records DatabaseUser's
+# delete as proven live -- but I could not re-confirm it in this session, so if that user
+# were somehow still alive the password should be rotated rather than accepted.
+eafe2c96ca8134c33c8489ec31dcdd354bf30255:tests/ga/chains/database.yaml:generic-api-key:72

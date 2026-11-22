@@ -963,7 +963,7 @@ provider encodes client-side:
 passwordBase64 := base64.StdEncoding.EncodeToString([]byte(data.Password.ValueString()))
 ```
 
-Sending `UHJvdmExMjM0NTY3ODlBQ0A=` (base64 of `Prova123456789AC@`) worked immediately.
+Sending a **base64-encoded** password worked immediately. The value is not recorded here: it was, together with its plaintext, and the security scan flagged the copy in `tests/ga/chains/database.yaml` correctly. Supply your own via `GA_DB_USER_PASSWORD_B64`; any value meeting the engine's policy works, and the point of this paragraph is the *encoding*, not the string.
 The same file records a second undocumented trap in a comment: that identical error is
 *also* returned while the DBaaS user API is still initialising, even with a correct
 password — the provider polls `GET` on a non-existent user until it 404s to prove the API
