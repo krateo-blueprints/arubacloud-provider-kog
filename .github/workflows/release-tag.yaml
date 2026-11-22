@@ -5,6 +5,43 @@
 # Charts opt into versioning with the CHART_VERSION placeholder in Chart.yaml, which the git tag
 # replaces at publish time. Pushing tag "0.1.0" publishes each chart <name> as:
 #   oci://ghcr.io/<owner>/charts/<name>:0.1.0
+#
+# SCHEDULED FOR DELETION, and do not "improve" it in the meantime. This file is a
+# repository-specific release, which R5 of krateo-blueprints' REPOSITORY.md says should be
+# the shared krateo-platformops/.github release-oci. That is agreed, not resisted -- it was
+# advisory only because release-oci was missing guards this file has, and those are being
+# closed rather than exempted.
+#
+# WHAT GATES THE SWAP: release-oci 2.0.0. Reviewed against this file's five pre-push checks
+# at PR #70's head (441a8da4); two were already covered and three were not:
+#
+#   1. no pre-push check that the INDEX-publishing credential exists -- the push uses
+#      GITHUB_TOKEN and indexing is downstream, so "pushed but never indexed" stayed
+#      reachable (the shape of github-provider-kog#111)
+#   2. no check that the token carries no whitespace -- a trailing newline fails the
+#      publisher with "Malformed input to a URL function" AFTER the push, half-publishing
+#   3. no channel qualification before the push -- values.schema.json, a
+#      CompositionDefinition in the dir or its parent, and refusing a `page-set` chart in
+#      `blueprints`
+#
+# All three are being closed in release-oci 2.0.0: the publisher's content gate becomes a
+# shared action called by BOTH publish-chart and release-oci (so (3) runs pre-push against
+# the publisher's own rules rather than a copy), with a REQUIRED `index_channel` input --
+# explicit `none` for a chart deliberately left out of the index, so an omission cannot
+# silently skip the credential check -- and an optional charts_publish_token tested for
+# presence and whitespace only, never used and never logged.
+#
+# A green token check proves PRESENCE AND SHAPE, NOT VALIDITY: an expired or wrongly scoped
+# token still fails at index time. That limit applies to this file's checks too.
+#
+# WHEN 2.0.0 SHIPS: replace this workflow with a release-oci caller AND delete these five
+# guards in the SAME change. Keeping them afterwards would be dead belt-and-braces that
+# drifts from the shared definition, which is the problem R5 exists to solve.
+#
+# WHAT MUST NOT REGRESS, whoever does it: release-notes.yaml stays a TOP-LEVEL caller. A
+# called workflow's permissions are capped at its caller's and custom secrets are not
+# inherited down a nested call, so a nested release-notes could never write a release body
+# -- release-oci documents this as the pattern at its own :109-111.
 name: release-tag
 
 on:
