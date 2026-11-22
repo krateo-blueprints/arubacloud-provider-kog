@@ -2086,6 +2086,19 @@ these two kinds, and **the parent's own condition has now been observed** rather
 > superseded by a run.** The halves are left stated above because the inference was sound and
 > a reader comparing the two should see what was inferred and what was then measured.
 
+> **Still the only observation, and both halves re-checked at the pin (2026-11-22).** The run
+> above is at **0.67.0 with core-provider 2.13.114**, and the pin has since moved to 0.84.0.
+> Rather than spend a cluster re-observing it, both halves were read at source:
+> oasgen-provider confirmed `ReasonNoCreateVerbDeclared` is unchanged at `condition.go:362`
+> on the 0.84.0 tag — with a **control at 0.67.0**, where the string also appears, so the
+> grep is known to work on the version that was measured — and core-provider diffed
+> `childhealth.go` across `2.13.114..kp/main`, where the arm matching this reason is 36 lines
+> at both tags with an **empty diff**, both ending in `return is(childFailed)`.
+> **That is a reason not to re-run; it is not a measurement at the new pin.** Neither side's
+> code changed between the observation and the current pin, which is a different and weaker
+> statement than having observed the parent at 0.84.0 — cite it as such. A re-run is the only
+> thing that would close the gap, and it remains unrun.
+
 Measured on a disposable GKE cluster with a probe-only composition
 (`tests/compositions/no-create-rollup`, never shipped) rendering one `LoadBalancer` — no
 create verb — alongside one `Vpc` that reconciles, so the parent's message has to *name* a
