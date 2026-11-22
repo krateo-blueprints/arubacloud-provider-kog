@@ -131,6 +131,7 @@ def main():
     verify_no_return_in_finally(errors)
     verify_create_pending_predicate(errors)
     verify_identifiers_resolve_on_both_sides(errors)
+    verify_chain_configuration_refs(errors)
     verify_maturity_counts_match(errors)
     verify_parity_page_names_every_kind(errors)
     verify_status_fields_exist_in_response_schema(errors)
@@ -1345,6 +1346,89 @@ def verify_create_pending_predicate(errors):
 # source exists, both sides name one agreed path); it cannot check the runtime.
 IDENTIFIER_NOT_IN_RESPONSE = {}
 
+
+def verify_chain_configuration_refs(errors):
+    """Every `configurationRef` a GA chain names must be provided by a manifest we ship.
+
+    WHAT THIS CATCHES, precisely: a chain naming a Configuration that nothing in samples/
+    provides -- a typo, or a manifest renamed without the chains following.
+
+    WHAT IT DOES NOT CATCH, said plainly because the distinction cost a billable run. The
+    Registry chain's `registry-config` DOES have a manifest (samples/container/
+    registry-configuration.yaml) and so does its ElasticIp dependency's `elasticip-config`.
+    They had simply never been APPLIED to the cluster, so `registryconfigurations -A`
+    returned "No resources found" while every static check passed. A dangling
+    configurationRef does not fail the apply: the CR is admitted and then cannot reconcile,
+    with no auth and no api-version, which reads like a broken controller.
+
+    That failure is only observable against a cluster, so it is gated there instead --
+    ga_chain.py now refuses before the first create rather than after two billable
+    dependencies. This check is the static half and is NOT a substitute for it.
+
+    It also prints what each chain requires, which is the thing an operator needs before
+    opening a window.
+    """
+    by_name = {}
+    for f in sorted(glob.glob("samples/**/*.yaml", recursive=True)):
+        try:
+            docs = list(yaml.safe_load_all(open(f)))
+        except Exception as exc:
+            errors.append("%s: will not parse (%s), so the Configurations it may provide "
+                          "were NOT counted" % (f, exc))
+            continue
+        for d in docs:
+            if not isinstance(d, dict):
+                continue
+            k = str(d.get("kind") or "")
+            n = ((d.get("metadata") or {}).get("name"))
+            if k.endswith("Configuration") and n:
+                by_name.setdefault(n, []).append((k, f))
+
+    chains, required = 0, {}
+    for path in sorted(glob.glob("tests/ga/chains/*.yaml")):
+        try:
+            chain = yaml.safe_load(open(path))
+        except Exception as exc:
+            errors.append("%s: will not parse (%s), so its configurationRefs were NOT "
+                          "checked" % (path, exc))
+            continue
+        if not isinstance(chain, dict) or not chain.get("resources"):
+            continue
+        chains += 1
+        for res in chain["resources"]:
+            if not isinstance(res, dict):
+                continue
+            ref = (res.get("spec") or {}).get("configurationRef") or {}
+            cname = ref.get("name")
+            if not isinstance(cname, str) or not cname or "${" in cname:
+                continue          # templated or absent; nothing static to resolve
+            want_kind = "%sConfiguration" % res.get("kind", "")
+            got = by_name.get(cname)
+            if not got:
+                errors.append(
+                    "%s: %s/%s names configurationRef %r, and NO manifest under samples/ "
+                    "provides a Configuration by that name. The CR would be admitted and "
+                    "then never reconcile -- no auth, no api-version -- which reads like a "
+                    "broken controller rather than a missing object."
+                    % (path, res.get("kind"), res.get("name"), cname))
+                continue
+            kinds = {k for k, _ in got}
+            if want_kind not in kinds:
+                errors.append(
+                    "%s: %s/%s names configurationRef %r, but the manifest(s) providing "
+                    "that name are %s -- not %s. A Configuration of the wrong kind cannot "
+                    "serve this resource."
+                    % (path, res.get("kind"), res.get("name"), cname,
+                       ", ".join(sorted(kinds)), want_kind))
+                continue
+            required.setdefault(os.path.basename(path), set()).add(cname)
+
+    for chain_file in sorted(required):
+        print("  %-28s requires Configuration(s): %s"
+              % (chain_file, ", ".join(sorted(required[chain_file]))))
+    print("Checked configurationRef in %d GA chain(s) against %d Configuration manifest(s) "
+          "(static only; in-cluster presence is ga_chain.py's preflight)"
+          % (chains, len(by_name)))
 
 def verify_identifiers_resolve_on_both_sides(errors):
     """Every declared identifier must resolve on BOTH sides of the match, not just the response.
