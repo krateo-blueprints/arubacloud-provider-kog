@@ -38,6 +38,15 @@
 #   * oasgen 0.67.0 emitted NoCreateVerbDeclared. Whether 0.84.0's PRODUCER still emits it
 #     is oasgen's to confirm and is NOT proved by a reason string declared at head -- the
 #     original reasoning here, unchanged and still correct.
+#     ANSWERED 2026-11-22, BY SOURCE AND NOT BY A RUN. oasgen-provider read the 0.84.0 tag:
+#     `ReasonNoCreateVerbDeclared` is unchanged at condition.go:362, same wire value as
+#     head, with NoCreateVerbDeclaredConditions() still returning both halves of a refusal
+#     -- and, the part that makes it evidence rather than assertion, a CONTROL at 0.67.0
+#     where the string also appears, so the grep that found it is known to work on the
+#     version we measured. They also flagged that the reason belongs to
+#     rest-dynamic-controller and is set on the GENERATED KIND'S CR, not on the
+#     RestDefinition; this probe reads `loadbalancer/probe-lb`, so it was already looking
+#     at the right object.
 #   * THE CONSUMER HALF DID NOT MOVE, and the line that used to stand here saying it did
 #     was wrong. I wrote that core-provider 2.13.115 -- the first cdc image embedding
 #     unstructured-runtime v1.28.1, where the management-policy gate is live -- had moved
@@ -49,10 +58,23 @@
 #     all. cdc 2.13.115's gate applies to COMPOSITIONS (including a composition used as a
 #     child), not to REST children. So 2.13.115 changes nothing about what this probe
 #     measured, and only the producer half above is open.
+#     CONFIRMED 2026-11-22 AND EXTENDED TO .124. core-provider diffed childhealth.go across
+#     2.13.114..kp/main: the case matching CreateUnreachable / NoCreateVerbDeclared /
+#     NoIdentifierRecorded is 36 lines at both tags, `diff` empty, both ending in
+#     `return is(childFailed)`. #597 adds two arms ABOVE ours for
+#     CreateWithheldByPolicy / RecoveryWithheldByPolicy, which match only those reasons, so
+#     a NoCreateVerbDeclared child cannot reach them; its parent-side message suffix applies
+#     only when the COMPOSITION's own management-policy withholds update, and this probe
+#     carries no annotation. (They noted their first comparison hashed two empty strings
+#     because the pattern missed, caught it, and re-ran -- which is why I am willing to
+#     quote the second one.)
 #
-# So a re-run at the 0.84.0 pin is its own exercise with its own cluster, and until it
-# happens the 0.67.0 reading must be quoted WITH its version rather than as "the probe
-# result".
+# SO BOTH HALVES ARE NOW ANSWERED WITHOUT A RE-RUN, and the distinction matters when
+# quoting it: the 0.67.0 reading is still the only OBSERVATION. What 2026-11-22 adds is that
+# neither side's code changed between then and the current pin -- producer reason identical
+# at 0.84.0, consumer arm byte-identical through 2.13.124. That is a sound reason not to
+# spend a cluster; it is NOT a measurement at the new pin, and must not be cited as one.
+# A re-run remains the only thing that would make it one.
 set -euo pipefail
 
 say()  { printf '\n=== %s ===\n' "$*"; }
