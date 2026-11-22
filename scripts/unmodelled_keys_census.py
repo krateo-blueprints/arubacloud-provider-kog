@@ -25,6 +25,20 @@ WHAT IT MEASURES, STATED PRECISELY, BECAUSE THE TWO ARE NOT INTERCHANGEABLE
 
     the annotation     keys in the response BODY the vendor actually returned, that the
                        CR's SPEC does not carry. One level deep. Needs a live resource.
+                       WHAT TRIGGERS IT, read at 0.84.0 rather than assumed: it is written
+                       from `Observe` (restResources.go:888, inside the handler's Observe
+                       which starts at :267), NOT from an update. Its own comment says
+                       "Reported whether or not the comparison found drift", and the call
+                       sits BEFORE the `if !res.IsEqual` branch. Preconditions are only:
+                       the update verb's body fields resolve, that body is non-empty, and
+                       at least one remote-only top-level key exists. So a single
+                       reconcile is enough and no drift has to be provoked.
+                       I had this backwards and told a peer the annotation needed an
+                       update DRIVEN -- confusing which fields are SELECTED (the update
+                       verb's body, :19/:214) with what triggers the WRITE. It matters
+                       because it decides whether an ABSENT annotation is evidence or an
+                       artefact of the chain: on a kind declaring an update with a body,
+                       absence is a real finding.
                        NOTE, measured rather than assumed: a field surfaced into STATUS by
                        additionalStatusFields is STILL reported as unmodelled. All four
                        control kinds declare `metadata.id` and populate `status.id` from
