@@ -1,0 +1,38 @@
+# Org-wide security scanning. This file supplies only the triggers and permissions; the
+# scanning itself is the shared reusable, so "identical across every repo" is structural
+# rather than a copy each repo keeps in step by hand -- the same reasoning as
+# release-notes.yaml.
+#
+# R8 of krateo-blueprints/charts' REPOSITORY.md (charts 1.5.1). The OTHER half of R8, a
+# `hack/preflight-refs.py` run by a preflight-refs workflow, is deliberately NOT here:
+# there is no canonical copy of that script today, and acmp is making it a shared reusable
+# in charts precisely so repos call it instead of each carrying a variant that drifts. A
+# standard enforced by one slightly-different script per repo is worse than no standard.
+#
+# FILENAME IS `security.yml`, not `.yaml`, matching the reference repo
+# (azuredevops-provider-kog) and the reusable it calls. Every other workflow here is
+# `.yaml`; that inconsistency is deliberate rather than a slip.
+#
+# TRIGGERS FOLLOW THIS REPO, NOT THE REFERENCE. The reference pins
+# `pull_request: branches: [main]`; this uses an unfiltered `pull_request:`, matching
+# validate.yaml and lint.yaml, which is a SUPERSET -- it also scans a PR targeting a
+# release branch. For a security scan, scanning more is the safe direction to differ in.
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege, and `security-events: write` is the one that matters: without it the
+# scan runs and its findings cannot be uploaded, which looks like a clean result.
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  pull-requests: read
+
+jobs:
+  security:
+    uses: krateo-platformops/.github/.github/workflows/security.yml@3ff640fd0dbef64c29b7a63a88b98da7f99e8052 # 1.0.1

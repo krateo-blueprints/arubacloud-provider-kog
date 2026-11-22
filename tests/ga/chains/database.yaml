@@ -13,6 +13,12 @@ vars:
   VPC_ID: ''
   SUBNET_ID: ''
   SG_ID: ''
+  # The DatabaseUser's password, BASE64-ENCODED -- see the secret block below for why
+  # base64 and not plaintext. Declared empty, so ga_chain.py refuses to run without it
+  # rather than creating a user with a credential from git. This file carried a literal
+  # here until 2026-11-22 and gitleaks flagged it correctly; vpn.yaml's `${PSK_SECRET}`
+  # was already doing the right thing.
+  DB_USER_PASSWORD_B64: ''
 residue:
 - /projects/${PROJECT}/providers/Aruba.Database/dbaas
 - /projects/${PROJECT}/providers/Aruba.Database/backups
@@ -89,7 +95,8 @@ resources:
   # Aruba's own SDK example. Their Terraform provider encodes client-side:
   #   internal/provider/dbaasuser_resource.go:130
   #   passwordBase64 := base64.StdEncoding.EncodeToString([]byte(...))
-  # Decoded value here: Prova123456789AC@
+  # The decoded value is NOT recorded here: it was, and gitleaks was right to
+  # flag it. Supply it yourself; any value meeting the engine\'s password policy works.
   #
   # The same error is ALSO returned while the DBaaS user API is still initialising,
   # even with a correct password -- the provider polls GET on a non-existent user until
@@ -97,7 +104,7 @@ resources:
   secret:
     name: ga-dbuser
     key: gauser
-    value: UHJvdmExMjM0NTY3ODlBQ0A=
+    value: ${DB_USER_PASSWORD_B64}
 - kind: Grant
   name: ga-grant
   self: /projects/${PROJECT}/providers/Aruba.Database/dbaas/${id:ga-dbaas}/users/gauser/grants/gadb

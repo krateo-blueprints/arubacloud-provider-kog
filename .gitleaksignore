@@ -1,0 +1,53 @@
+# One accepted finding. Everything else must fail the scan.
+#
+# WHY A COMMIT FINGERPRINT AND NOT A PATH ALLOWLIST. `security.yml` runs gitleaks in git
+# mode with fetch-depth 0, which reports a secret ONCE, at the commit that introduced it,
+# not in every descendant. A commit is immutable, so this fingerprint can never drift --
+# unlike a fingerprint for a finding at HEAD, which stops matching when the line moves.
+# A path allowlist would blind the scanner to every FUTURE secret in that file, forever;
+# this accepts exactly one known finding and nothing else. (Mechanism confirmed by acmp,
+# who owns the shared workflow; the workflow's own error text pointed the other way and is
+# being corrected.)
+#
+# WHAT IT IS: a base64 password for the DatabaseUser that
+# `tests/ga/chains/database.yaml` creates and deletes inside a single GA chain run. Not an
+# account credential, and not a credential for anything that outlives the run.
+#
+# FIXED FORWARD IN 3e68515, not suppressed. The chain now takes the value from the
+# operator's shell as `${DB_USER_PASSWORD_B64}`, declared empty so the run refuses rather
+# than quietly using a credential out of git. `vpn.yaml`'s `${PSK_SECRET}` was already
+# doing this correctly; database.yaml was the one outlier.
+#
+# A SECOND COPY WAS FOUND BY LOOKING FOR IT. The same value, with its plaintext beside it,
+# was also in `docs/live-cluster-test.md:966` -- which the scanner did NOT report, because
+# it reports only the introducing commit and that doc copy came later. Fixing the file the
+# scan named would have left the value in the repo. Anyone accepting a finding here should
+# grep the working tree for the value first; that check is what turned one fix into two.
+#
+# NOT DONE, deliberately: no history rewrite. It would invalidate every SHA in a repo with
+# 42 merged PRs and break pins other work quotes, to remove a throwaway test password.
+#
+# THIS REPOSITORY IS PUBLIC (verified: visibility=PUBLIC). So the base64 password, and the
+# plaintext that sat beside it in docs/live-cluster-test.md, are readable by anyone,
+# permanently, and no fingerprint here changes that. Accepting the finding is a statement
+# that the credential is DEAD -- not that it is hidden.
+#
+# OPEN, AND THE ONE THING THAT MAKES THIS SAFE OR NOT: whether the DBaaS user the password
+# belongs to still exists on the Aruba side. The chain's teardown verifies a 404 for it and
+# docs/coverage.md records DatabaseUser's delete as proven live -- but that is evidence
+# about PAST RUNS, not a reading taken now. It could not be taken in this session: there is
+# no Aruba token and no client credential reachable from here, and every route to one needs
+# the credential only the account owner holds.
+#
+# REUSE: ANSWERED. Diego confirmed on 2026-11-22 that this password was only ever used for
+# this test user -- not another fixture, not a real database user, not a password manager
+# entry, not another service. Recorded as a stated fact from the account owner, not as an
+# inference from the repository, because no grep of this repo could have established it.
+#
+# STILL PROVISIONAL ON ONE POINT: that the DBaaS user itself is gone. The check is agreed
+# and queued -- at the next credential bootstrap, GET that user and expect a 404. If it
+# EXISTS, stop and rotate before anything else; the fingerprint stays either way. Replace
+# this block with the measured result -- date, status code, what was queried -- rather than
+# deleting it. Raised by acmp, whose point was that "recorded but unverified" is not a
+# resting state on a public repository, and who was right.
+eafe2c96ca8134c33c8489ec31dcdd354bf30255:tests/ga/chains/database.yaml:generic-api-key:72
