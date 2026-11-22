@@ -25,16 +25,62 @@ name: registry
 vars:
   PROJECT: ''
   LOCATION: ITBG-Bergamo
-  # These three name EXISTING resources in whoever's account runs the chain, so they are
-  # declared empty and must come from the environment -- see ga_chain.py's var merge.
-  VPC_ID: ''
-  SUBNET_ID: ''
-  SG_ID: ''
+  # This chain used to require VPC_ID, SUBNET_ID and SG_ID from the environment, naming
+  # resources that had to already exist in whoever's account ran it. It now builds its own,
+  # which is what every other chain here does -- cloudserver.yaml and network-security.yaml
+  # both create Vpc -> Subnet -> SecurityGroup inline and need only PROJECT.
+  #
+  # IT COSTS NOTHING TO DO SO. vpcs, subnets and securitygroups carry no `billingPeriod` in
+  # their spec schema; the billable three are the ElasticIp, the BlockStorage and the
+  # Registry, unchanged. So the old requirement bought nothing and made the run depend on
+  # unknown account state -- three IDs nobody had recorded, which is a blocker discovered at
+  # window time rather than before it.
 residue:
   - /projects/${PROJECT}/providers/Aruba.Container/registries
   - /projects/${PROJECT}/providers/Aruba.Network/elasticIps
   - /projects/${PROJECT}/providers/Aruba.Storage/blockStorages
+  - /projects/${PROJECT}/providers/Aruba.Network/vpcs
 resources:
+  # Non-billable prerequisites, in dependency order. 10.140.0.0/24 is chosen clear of every
+  # other chain's range (cloudserver 10.20.1.0/24, vpn 10.60.0.0/24, network-security
+  # 10.120.0.0/24) so two chains can run in one account without colliding.
+  - kind: Vpc
+    name: ga-reg-vpc
+    spec:
+      configurationRef: {name: vpc-config, namespace: default}
+      projectId: ${PROJECT}
+      metadata: {name: ga-reg-vpc, location: {value: "${LOCATION}"}, tags: []}
+      properties:
+        default: false
+        # preset only works where the location has no VPC yet; cloudburst already has one.
+        preset: false
+    drift: /projects/${PROJECT}/providers/Aruba.Network/vpcs/${id:self}
+
+  - kind: Subnet
+    name: ga-reg-subnet
+    spec:
+      configurationRef: {name: subnet-config, namespace: default}
+      projectId: ${PROJECT}
+      vpcId: ${id:Vpc}
+      metadata: {name: ga-reg-subnet, location: {value: "${LOCATION}"}, tags: []}
+      properties:
+        type: Advanced
+        default: false
+        network:
+          address: 10.140.0.0/24
+    drift: /projects/${PROJECT}/providers/Aruba.Network/vpcs/${id:Vpc}/subnets/${id:self}
+
+  - kind: SecurityGroup
+    name: ga-reg-sg
+    spec:
+      configurationRef: {name: securitygroup-config, namespace: default}
+      projectId: ${PROJECT}
+      vpcId: ${id:Vpc}
+      metadata: {name: ga-reg-sg, location: {value: "${LOCATION}"}, tags: []}
+      properties:
+        default: false
+        preset: false
+    drift: /projects/${PROJECT}/providers/Aruba.Network/vpcs/${id:Vpc}/securityGroups/${id:self}
   - kind: ElasticIp
     name: ga-reg-eip
     self: /projects/${PROJECT}/providers/Aruba.Network/elasticIps/${id:self}
@@ -71,9 +117,10 @@ resources:
         adminUser: {username: gaadmin}
         billingPlan: {billingPeriod: Hour}
         subnet:
-          uri: "/projects/${PROJECT}/providers/Aruba.Network/vpcs/${VPC_ID}/subnets/${SUBNET_ID}"
+          uri: "/projects/${PROJECT}/providers/Aruba.Network/vpcs/${id:Vpc}/subnets/${id:ga-reg-subnet}"
+        # Registry takes securityGroup.URI; Kaas takes securityGroup.NAME. Not a typo.
         securityGroup:
-          uri: "/projects/${PROJECT}/providers/Aruba.Network/vpcs/${VPC_ID}/securityGroups/${SG_ID}"
+          uri: "/projects/${PROJECT}/providers/Aruba.Network/vpcs/${id:Vpc}/securityGroups/${id:ga-reg-sg}"
         publicIp:
           uri: "/projects/${PROJECT}/providers/Aruba.Network/elasticIps/${id:ga-reg-eip}"
         blockStorage:
