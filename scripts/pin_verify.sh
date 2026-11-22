@@ -82,6 +82,21 @@ case "$CLUSTER_PROVIDER" in
 esac
 export CTX
 SRC_CTX="${SRC_CONTEXT:-kind-aruba-110}"           # where the credential already lives
+# WHERE THE CLIENT CREDENTIAL COMES FROM.
+#
+#   copy       (default) pipe it cluster-to-cluster out of SRC_CTX, as before. Requires
+#              that cluster to be RUNNING, which the kind clusters are not by standing
+#              directive -- so this is now the exceptional path, not the usual one.
+#   bootstrap  an operator creates it here with scripts/eso-bootstrap.sh, which prompts
+#              on /dev/tty and never takes the secret from argv or a file. This script
+#              then WAITS for the Secret to appear and carries on.
+#
+# `bootstrap` exists because the credential stopped living in a cluster: it lives with
+# the person who owns the account. Copying from a stopped cluster was a dependency on
+# machine state nobody needed -- and the one time it mattered, the source cluster held
+# the only copy, which is a worse place for a credential than a human's terminal.
+CRED_SOURCE="${CRED_SOURCE:-copy}"
+CRED_WAIT="${CRED_WAIT:-1800}"                     # seconds to wait in bootstrap mode
 CHAIN="${CHAIN:-tests/ga/chains/network-security.yaml}"
 # The directory of RestDefinitions to apply. Point it at a prepared copy to try an
 # experimental definition without putting it in restdefinitions/, where CI and every
@@ -544,6 +559,7 @@ fi
 # not count as evidence".
 #
 # stderr is CAPTURED rather than discarded, so the message can be shown and matched.
+if [ "$CRED_SOURCE" = "copy" ]; then
 src_err=$(kubectl --kubeconfig "$SRC_KUBECONFIG" --context "$SRC_CTX" \
   get secret aruba-client-credentials -n krateo-system 2>&1 >/dev/null)
 if [ -n "$src_err" ]; then
@@ -557,6 +573,10 @@ if [ -n "$src_err" ]; then
   This is not the same as the credential being missing. The evidence cluster's
   apiserver is unreachable or overloaded -- check it is running and retry." ;;
   esac
+fi
+else
+  say "CRED_SOURCE=${CRED_SOURCE} -- not reading ${SRC_CTX}; an operator creates the
+    credential in the new cluster instead"
 fi
 
 if [ "$CLUSTER_PROVIDER" = "kind" ]; then
@@ -583,6 +603,39 @@ helm --kube-context "$CTX" upgrade --install external-secrets \
   --namespace external-secrets --create-namespace --wait --timeout 5m \
   || die "external-secrets install failed"
 
+if [ "$CRED_SOURCE" = "bootstrap" ]; then
+  kubectl --context "$CTX" create namespace krateo-system >/dev/null 2>&1
+  say "WAITING FOR THE CLIENT CREDENTIAL -- run this in another terminal"
+  cat <<EOM
+
+    KUBECONFIG=${PIN_KUBECONFIG} KUBE_CONTEXT=${CTX} scripts/eso-bootstrap.sh
+
+  KUBECONFIG is part of that line, not decoration: this script keeps the cluster in an
+  ISOLATED kubeconfig so it never writes ~/.kube/config, so a plain kubectl in another
+  shell cannot see this cluster at all. Without it eso-bootstrap.sh would target
+  whatever that shell's current context happens to be -- which is the one mistake here
+  with a real blast radius.
+
+  It prompts for client_id and client_secret on the terminal, verifies them against
+  Aruba BEFORE storing (so a typo fails now rather than every 20 minutes), and applies
+  the two labels ESO requires. The secret never reaches disk, argv or any log -- which
+  is why this script cannot do it for you.
+
+  Waiting up to ${CRED_WAIT}s. Ctrl-C is safe; the cluster is already built.
+
+EOM
+  cred_deadline=$(( $(date +%s) + CRED_WAIT ))
+  until kubectl --context "$CTX" get secret aruba-client-credentials -n krateo-system \
+          -o name >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$cred_deadline" ]; then
+      die "no aruba-client-credentials in ${CTX}/krateo-system after ${CRED_WAIT}s.
+  The cluster is built and ESO is installed, so nothing is lost: run eso-bootstrap.sh
+  and re-run this script, or raise CRED_WAIT."
+    fi
+    sleep 10
+  done
+  echo "    credential present"
+else
 say "copying the client credential from ${SRC_CTX} (never touches disk)"
 kubectl --context "$CTX" create namespace krateo-system >/dev/null 2>&1
 # -o yaml straight into apply. The pipe is the point: the secret is never written to a
@@ -604,6 +657,7 @@ labels["external-secrets.io/type"] = "webhook"
 yaml.safe_dump(d, sys.stdout)
 ' | kubectl --context "$CTX" apply -f - >/dev/null || die "credential copy failed"
 echo "    copied"
+fi
 
 say "applying the ESO store and the token ExternalSecret"
 kubectl --context "$CTX" apply -f eso/clustersecretstore.yaml -f eso/externalsecret.yaml \
