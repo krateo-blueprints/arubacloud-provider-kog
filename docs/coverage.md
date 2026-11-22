@@ -260,6 +260,8 @@ What actually blocked it was the **probe**, not the resource. The generic drift 
 | schedule | `BackupPolicy` | **GA** | findby,get,create,update,delete | `metadata.name` | full lifecycle live incl. drift correction — [live-cluster-test](live-cluster-test.md) |
 | schedule | `BackupPolicyAssignment` | beta | findby,get,create,update,delete | `metadata.name` | create → observe → **drift corrected** re-proven live 2026-10-31 on the injection-confirming probe, so this no longer rests on the era when a 2xx counted as correction. **Delete DOES NOT COMPLETE, and that is now earned rather than assumed.**
 
+**DECISION 2026-11-22: this stays `beta`, deliberately, and no further cluster time is being spent trying to promote it.** The unproven verb is unproven because the vendor does not complete it, not because we have not tried. Re-attempting the delete could only produce a third stranded assignment and a fourth row in the table below — the last attempt left `ga-bpa-c` behind precisely that way — so the cost is another permanent residue on the account in exchange for a datapoint the 8-day case already carries. Promoting it would mean claiming a lifecycle the API does not finish; the honest tier is the one that records which verb is unproven and why. Revisit only if Aruba reports the stranding fixed.
+
 ```
 drift BackupPolicyAssignment/ga-bpa-c: ok
 --- deleting BackupPolicyAssignment/ga-bpa-c

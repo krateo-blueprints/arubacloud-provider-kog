@@ -986,6 +986,68 @@ def main():
         raise SystemExit(f"token is not usable (HTTP {code})")
     print(f"token OK — chain '{chain['name']}'")
 
+    # PREFLIGHT: every Configuration a resource names must already exist, checked BEFORE
+    # anything is created.
+    #
+    # A dangling `configurationRef` does not fail the apply. The CR is admitted and then
+    # cannot reconcile at all -- no auth, no api-version -- so it sits there looking like a
+    # controller or credential fault. Registry is the worked example: its
+    # `registryconfigurations` and its ElasticIp dependency's `elasticipconfigurations`
+    # were both empty while the manifests sat unapplied in samples/, recorded as a
+    # pre-flight BLOCKER in tests/ga/derived/payloads.yaml.
+    #
+    # WHY IT RUNS BEFORE THE FIRST CREATE RATHER THAN PER-RESOURCE: the registry chain
+    # creates an ElasticIp and a 20GB BlockStorage before it ever reaches the Registry, and
+    # both are BILLABLE and hourly. Discovering the Registry's missing Configuration at its
+    # own turn means having already paid for two resources to learn something knowable from
+    # one `kubectl get`. Same shape as upgrade_axis.sh refusing before anything moves.
+    #
+    # Resources that this run will SKIP are not checked -- a billable resource skipped for
+    # want of --with-billable needs no Configuration.
+    cfg_missing, cfg_seen = [], set()
+    for res in chain["resources"]:
+        if res.get("billable") and "--with-billable" not in flags:
+            continue
+        ref = (res.get("spec") or {}).get("configurationRef") or {}
+        cname = ref.get("name")
+        if not cname:
+            continue
+        cname = expand(cname, variables, ids={}, self_kind=res["kind"])
+        cns = expand(ref.get("namespace") or NS, variables, ids={}, self_kind=res["kind"])
+        # The served CRD is <kind-lowercased>configurations.<group> -- the naming rule
+        # core-provider/oasgen use, and the same one the probe script reads from status
+        # rather than constructing, because a guessed kind fails as "no matches for kind".
+        # Here a wrong guess is indistinguishable from a missing object, so the two are
+        # reported differently below.
+        crd = f"{res['kind'].lower()}configurations.{GROUP}"
+        if (crd, cname, cns) in cfg_seen:
+            continue
+        cfg_seen.add((crd, cname, cns))
+        probe = kubectl("get", crd, cname, "-n", cns, "-o", "name")
+        if probe.returncode != 0:
+            err = (probe.stderr or "").strip().replace("\n", " ")[:160]
+            kindless = "server doesn't have a resource type" in err or "no matches for kind" in err
+            cfg_missing.append(
+                (res["kind"], res["name"], crd, cname, cns,
+                 "the Configuration CRD itself is not served" if kindless
+                 else "the Configuration object does not exist"))
+    if cfg_missing:
+        lines = [f"  {k}/{n}: {why}" for k, n, crd, cname, cns, why in cfg_missing]
+        lines += [f"    kubectl --context {CONTEXT} get {crd} {cname} -n {cns}"
+                  for k, n, crd, cname, cns, why in cfg_missing]
+        raise SystemExit(
+            "PREFLIGHT FAILED -- nothing was created, nothing was billed.\n"
+            + "\n".join(lines)
+            + "\n\nA dangling configurationRef does not fail the apply: the CR is admitted "
+              "and then cannot reconcile, with no auth and no api-version, which reads like "
+              "a broken controller rather than missing setup.\n"
+              "Configuration manifests for this repo live under samples/ (e.g. "
+              "samples/container/registry-configuration.yaml, "
+              "samples/network/elasticip-configuration.yaml); apply the ones this chain "
+              "needs, then re-run.")
+    if cfg_seen:
+        print(f"preflight OK — {len(cfg_seen)} Configuration(s) present")
+
     ids, created, drift_results = {}, [], {}
     secrets_created = []
     self_urls = {}
