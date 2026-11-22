@@ -94,6 +94,31 @@ from providers import PROVIDERS  # one list; see scripts/providers.py
 #   compareScope - drift comparison scope, when the default would never converge
 #   note         - short rationale, echoed into the generated file header
 OVERRIDES = {
+    "metering/alertRules": dict(
+        # AlertRule's two sides name the SAME value at DIFFERENT paths, and the fix is a
+        # relocation rather than a choice between them.
+        #
+        #   CR   : the POST body is {metadata:{location,name,tags}, properties:{...}},
+        #          so the spec carries `spec.metadata.name`.
+        #   item : the findby returns {actions, alertModel, id, lastActivation, lastEdit,
+        #          lastReception, request, resourceUid, resourceVersion} -- the only `name`
+        #          is inside the echoed request envelope, at `values[].request.name`.
+        #
+        # `identifiers` is ONE path resolved against BOTH, so neither `name` (what this
+        # generator used to emit, matching NEITHER side) nor `request.name` (which matches
+        # only the response) can work. The findby fieldMapping below moves the response
+        # value onto the item at `metadata.name`, so both sides agree on one path.
+        #
+        # WHY THIS IS NOT metaWrap=True: `meta` also drives additionalStatusFields to
+        # `metadata.id`, and every read here returns a root `id`. Flipping it would leave
+        # status.id unpopulated, which is the delete path parameter -- orphaning the
+        # resource. The two concerns are decoupled on purpose.
+        identifiers=["metadata.name"],
+        responseFieldMapping={
+            "findby": [dict(inResponse="request.name",
+                            inCustomResource="spec.metadata.name")],
+        },
+    ),
     "compute/cloudServers": dict(
         metaWrap=True,
         # CloudServer lifecycle (power on/off, associate EIPs/SGs/subnets, attach
@@ -653,6 +678,14 @@ def build(provider, spec):
             # controller re-POSTs every reconcile (unbounded duplicate creates against a
             # live account), and metadata.id never populates, so delete has an
             # unresolvable path parameter and the resource is orphaned.
+            #
+            # STILL TRUE OF `meta`, and no longer the whole story for AlertRule (2026-11-22).
+            # "findby can never match" assumed the item is fixed. It is not: a
+            # response-direction fieldMapping relocates a path onto the item before the
+            # match, so `metadata.name` IS reachable once declared alongside one. AlertRule
+            # now takes that route via OVERRIDES["metering/alertRules"] -- identifiers
+            # only, deliberately NOT metaWrap, because the additionalStatusFields half of
+            # this paragraph is still correct and `id` must stay flat.
             if meta and has_list and not response_is_meta_wrapped(spec, coll):
                 meta = False
 
@@ -1037,6 +1070,19 @@ def render(r):
             if v["action"] == action:
                 v["notFoundBody"] = {"inline": program}
 
+    # RESPONSE-DIRECTION field mapping: relocates a response path onto the item BEFORE the
+    # identifier match, which is what makes an identifier expressible when the two sides
+    # disagree on where the value lives. normalizeItems (restclient.go:698) runs this over
+    # every findby item and its error names the ordering -- "normalizing findby item N
+    # before matching" -- and bodyRelativePath strips the leading `spec.`/`status.`, so the
+    # destination lands at a BARE item path. It cannot write to the CR: isInResource reads
+    # the live object, so the CR must already hold the path by its own route.
+    for action, entries in (ov.get("responseFieldMapping") or {}).items():
+        for v in verbs:
+            if v["action"] == action:
+                for e in entries:
+                    v.setdefault("fieldMapping", []).append(dict(e))
+
     resource = {"kind": r["kind"]}
     if r["meta"]:
         resource["identifiers"] = [ov.get("metaIdent", "metadata.name")]
@@ -1066,6 +1112,13 @@ def render(r):
             resource["additionalStatusFields"] = ["metadata.id"]
         else:
             resource["identifiers"] = ["name"]
+
+    # An EXPLICIT override wins over all three branches above. Kept separate from
+    # `idField`, which is overloaded -- it also feeds id_target and the status field, so
+    # reusing it to say "the identifier is metadata.name" would silently move
+    # additionalStatusFields too.
+    if ov.get("identifiers"):
+        resource["identifiers"] = list(ov["identifiers"])
 
     # Appended LAST, and append-only is not incidental: AdditionalStatusFields carries
     # a CEL rule allowing new entries at the end but no removal, rename or reorder of
