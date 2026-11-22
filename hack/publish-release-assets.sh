@@ -5,7 +5,7 @@
 # RELEASE_NOTES is the body used only if this script is the one that creates the release.
 #
 # WHY THIS IS NOT `gh release view || gh release create`. A tag push starts TWO workflows that both
-# want the release: release-tag (this one, to attach the stamped CompositionDefinition) and
+# want the release: release-oci.yaml (this one, to attach the stamped CompositionDefinition) and
 # release-notes (the org reusable, which creates the release to write its body). With view-then-create,
 # release-tag can see "no release" and then lose the create to release-notes a moment later, and the
 # step dies on `HTTP 422 ... Release.tag_name already exists` -- with the chart already pushed and only

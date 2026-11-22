@@ -29,9 +29,12 @@ spec:
 
 **The repository is versioned by git tag, and the tag is the only source of truth.**
 
-`.github/workflows/release-tag.yaml` fires on any tag matching `[0-9]+.[0-9]+.[0-9]+`.
-It discovers every `Chart.yaml`, substitutes the `CHART_VERSION` placeholder with the
-tag, and publishes each chart as an OCI artifact:
+`.github/workflows/release-oci.yaml` fires on any tag matching `[0-9]+.[0-9]+.[0-9]+`.
+It is a thin caller: the shared `krateo-platformops/.github` release-oci workflow discovers
+every `Chart.yaml` (pruning `tests/`, `examples/` and the rest of its list), substitutes the
+`CHART_VERSION` placeholder with the tag, publishes each chart as an OCI artifact, **and**
+indexes it. Only the GitHub-release asset job stays in this repo, because a called
+workflow's permissions are capped at its caller's:
 
 ```
 oci://ghcr.io/krateo-blueprints/charts/<chart-name>:<tag>
@@ -140,10 +143,19 @@ apart.
 
 ### The chart-push pin must stay at or after the argv fix
 
-`release-tag.yaml` pins
-`krateo-platformops/.github/.github/actions/chart-push@e1d3e99215e80ae56eca4a67e9e061b2c73168b8`
-(tag 1.0.0, byte-identical to `653ac1e6` where the fix landed — verified with `cmp`, not only by hash).
-**Do not move it backwards.** Commit `5f126b7d`, pinned here briefly on 2026-11-18, put the
+**THIS REPO NO LONGER PINS `chart-push`, and the instruction below is now upstream's to
+follow.** Since the release-oci migration, the pin lives in the shared workflow, which pins
+`chart-push@88eaff13555233606da5ff3ff3bfed8f534436ce`.
+
+**That is not a regression, and it was checked rather than assumed:** `88eaff13`'s
+`push.sh` is **byte-identical** to `e1d3e99215e80ae56eca4a67e9e061b2c73168b8` — the commit
+this repo vetted — verified with `cmp` on 2026-11-22, both 130 lines, three `-K -` stdin
+configs and no argv bearer header. So the property below holds at the pin this repo now
+inherits. The finding has been relayed to the shared workflow's owner, because the
+enforcement point moved out of this repository while the risk did not.
+
+The vetted commit is tag 1.0.0, byte-identical to `653ac1e6` where the fix landed — verified
+with `cmp`, not only by hash. **Do not move it backwards.** Commit `5f126b7d`, pinned here briefly on 2026-11-18, put the
 registry credential on curl's command line — `-u user:pass` and
 `-H "Authorization: Bearer ..."` — so both sat in process argv, readable by any other
 process in the same job. Never echoed, never written to a file, pull-scoped, but an
