@@ -143,19 +143,36 @@ apart.
 
 ### The chart-push pin must stay at or after the argv fix
 
-**THIS REPO NO LONGER PINS `chart-push`, and the instruction below is now upstream's to
-follow.** Since the release-oci migration, the pin lives in the shared workflow, which pins
-`chart-push@88eaff13555233606da5ff3ff3bfed8f534436ce`.
+**THIS REPO NO LONGER PINS `chart-push`, AND THE RULE IS NO LONGER A RULE — IT IS A TEST.**
+Since the release-oci migration the pin lives in the shared workflow
+(`chart-push@88eaff13555233606da5ff3ff3bfed8f534436ce`), and since 2026-11-22 the property
+below is **enforced by contents in `krateo-platformops/.github` CI** rather than by anyone
+remembering this paragraph:
 
-**That is not a regression, and it was checked rather than assumed:** `88eaff13`'s
-`push.sh` is **byte-identical** to `e1d3e99215e80ae56eca4a67e9e061b2c73168b8` — the commit
-this repo vetted — verified with `cmp` on 2026-11-22, both 130 lines, three `-K -` stdin
-configs and no argv bearer header. So the property below holds at the pin this repo now
-inherits. The finding has been relayed to the shared workflow's owner, because the
-enforcement point moved out of this repository while the risk did not.
+* `.github/scripts/pinned_chart_push_test.py` finds **every distinct chart-push commit pinned
+  under `.github/workflows`**, extracts the action directory at that commit, puts *today's*
+  `push_test.py` beside it and runs it there — so a pin moved backwards, or to a branch, is
+  tested against current cases rather than against whatever shipped with it;
+* `test-pinned-chart-push.yaml` runs it on any workflow or chart-push change, and **requires
+  a negative control**: `5f126b7` must be REFUSED, naming `push.sh:69` (`-u
+  user:${…PASSWORD}`) and `:73` (`-H Authorization`). A check that cannot fail proves
+  nothing, which is why the control is part of the gate rather than a comment;
+* it fails as **VOID, distinctly**, when the pinned commits are not in the clone — so "could
+  not test" never reads as "passed".
 
-The vetted commit is tag 1.0.0, byte-identical to `653ac1e6` where the fix landed — verified
-with `cmp`, not only by hash. **Do not move it backwards.** Commit `5f126b7d`, pinned here briefly on 2026-11-18, put the
+So moving that pin backwards now turns the shared repo's CI red. That is strictly better than
+this paragraph, and this paragraph exists only to carry the finding the test's name cannot.
+
+**The finding.** Commit `5f126b7d`, pinned here briefly on 2026-11-18, put the registry
+credential on curl's command line, so it sat in process argv readable by any other process in
+the same job. Never echoed, never written to a file, pull-scoped — but an exposure the bare
+`helm push` it replaced did not have.
+
+**The pin this repo inherits was verified, not assumed:** `88eaff13`'s `push.sh` is
+**byte-identical** to the `e1d3e99215e80ae56eca4a67e9e061b2c73168b8` this repo vetted (tag
+1.0.0, itself byte-identical to `653ac1e6` where the fix landed) — `cmp` on 2026-11-22, both
+130 lines, three `-K -` stdin configs, no argv bearer header. If it ever moves again, verify
+by **contents**, not by ancestry. Commit `5f126b7d`, pinned here briefly on 2026-11-18, put the
 registry credential on curl's command line — `-u user:pass` and
 `-H "Authorization: Bearer ..."` — so both sat in process argv, readable by any other
 process in the same job. Never echoed, never written to a file, pull-scoped, but an
