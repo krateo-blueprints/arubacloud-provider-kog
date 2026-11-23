@@ -30,14 +30,23 @@
 # passes, after which only the comment changes to `# 2.1.0` and the SHA stays put. What was
 # tested is then byte-for-byte what is released.
 #
-# DO NOT BUMP THIS PIN UNTIL `2.1.0` EXISTS ON aa90d48, INCLUDING VIA DEPENDABOT. This
-# repo's dependabot watches github-actions and will offer newer commits of this very
-# workflow -- upstream main has already moved past aa90d48 (chart-push pin tests, a helm pin
-# in security.yml, and a 2.2.0 candidate). Merging such a bump before the release would
-# delete the thing the release exists to prove: acmp tags 2.1.0 on the commit THIS repo's
-# first index-path run validated, and a run against a different commit tags nothing. None of
-# those newer commits touch the index path, so there is no benefit to taking them early and a
-# real cost to it. After the tag lands, bumping is ordinary again.
+# DO NOT BUMP THIS PIN UNTIL `2.1.0` EXISTS ON aa90d48 -- AND THE DANGEROUS BUMP LOOKS LIKE
+# AN UPGRADE. Dependabot does not offer newer COMMITS of a SHA pin; it offers newer release
+# TAGS. Measured 2026-11-23: upstream has 5 tags, the newest being `2.0.0`, and it points at
+# `7da11cb60cee`, which `compare` reports as `status=ahead ahead_by=6 behind_by=0` relative
+# to this pin -- i.e. 2.0.0 is an ANCESTOR of aa90d48.
+#
+# So a PR titled "bump ... to 2.0.0" would move this pin SIX COMMITS BACKWARDS, onto the
+# index path that indexes only the charts PUSHED in a run. That is the defect aa90d48 fixes:
+# a release that pushes and then fails to index can never be finished by re-running it,
+# because the re-run skips the push and therefore skipped the index. Taking "2.0.0" would
+# throw away the exact property this release exists to prove, while reading as an upgrade in
+# the PR title.
+#
+# CLOSE such a PR. After 2.1.0 is tagged on aa90d48 the version ordering stops lying and
+# bumping is ordinary again. (The earlier version of this note said the risk was newer
+# commits that "do not touch the index path" -- wrong in the direction that matters, and
+# corrected by acmp.)
 #
 # WHY THIS SHA AND NOT AN EARLIER ONE -- three candidates were superseded before anyone
 # pinned them, and the second is the instructive one:
