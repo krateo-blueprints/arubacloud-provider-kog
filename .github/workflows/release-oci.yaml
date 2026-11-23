@@ -157,10 +157,33 @@ jobs:
           stage="$(mktemp -d)"; assets=()
           for tgz in "${pkgs[@]}"; do
             # <name>/compositiondefinition.yaml, where <name> is the chart. release-oci packs
-            # one from the chart dir OR its parent (ours is compositions/, beside the chart),
-            # and refuses to push a package holding more than one.
-            cd_path="$(tar -tzf "$tgz" | grep -E '^[^/]+/compositiondefinition\.yaml$' || true)"
-            [ -n "$cd_path" ] || { echo "no CompositionDefinition in $(basename "$tgz")"; continue; }
+            # one from the chart dir OR, failing that, the one in the chart directory's PARENT
+            # (ours is compositions/, beside the chart).
+            #
+            # UNIQUENESS IS THIS ANCHOR'S JOB, NOT THE UPSTREAM'S. An earlier version of this
+            # comment claimed release-oci "refuses to push a package holding more than one".
+            # It does not: ship-cd.sh's verify uses `grep -qxF` and checks PRESENCE, not
+            # uniqueness (confirmed by acmp, who owns it). So two matches here would make
+            # `${cd_path%%/*}` read up to the first slash of a TWO-LINE string and hand tar a
+            # path that is not a path -- a confusing failure, or worse a wrong asset. Counted
+            # and refused explicitly instead.
+            #
+            # A PARENT-DIRECTORY CD IS SHARED BY EVERY CHART UNDER THAT PARENT, which is a
+            # trap for the pending chart/ migration rather than for today: with `chart/` and
+            # `config-chart/` at the repository root, one root-level compositiondefinition.yaml
+            # is picked up for BOTH, and verify then refuses config-chart because the CD
+            # installs the other chart. If this repo ever ships a second chart, each CD goes
+            # INSIDE its own chart directory.
+            cd_paths="$(tar -tzf "$tgz" | grep -E '^[^/]+/compositiondefinition\.yaml$' || true)"
+            n_cd="$(printf '%s' "$cd_paths" | grep -c . || true)"
+            [ "${n_cd}" != "0" ] || { echo "no CompositionDefinition in $(basename "$tgz")"; continue; }
+            [ "${n_cd}" = "1" ] || {
+              echo "::error::$(basename "$tgz") holds ${n_cd} CompositionDefinitions:"
+              printf '::error::  %s\n' ${cd_paths}
+              echo "::error::Exactly one is expected. Upstream checks presence, not uniqueness,"
+              echo "::error::so refusing here rather than attaching an arbitrary one."
+              exit 1; }
+            cd_path="${cd_paths}"
             name="${cd_path%%/*}"
             tar -xzf "$tgz" -C "$stage" "$cd_path"
             # Named for the CHART, not for the directory it was authored in. release-tag.yaml
