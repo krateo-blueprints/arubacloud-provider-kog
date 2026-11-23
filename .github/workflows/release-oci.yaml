@@ -105,10 +105,16 @@ jobs:
   # permissions reason in the header.
   release-assets:
     needs: [release]
-    # Tags only. A dispatch -- rehearsal or not -- has no release to attach to, and guarding
-    # on the event rather than on `dry_run` means a dispatch with dry_run=false still cannot
-    # touch a release.
-    if: ${{ github.event_name == 'push' }}
+    # RUNS ON A DISPATCH TOO, DELIBERATELY -- the ATTACH step is what is gated on a tag, not
+    # the whole job. An earlier version gated the job on `github.event_name == 'push'`, which
+    # meant a dispatch dry run never exercised it at all: the one part of this migration whose
+    # MECHANISM CHANGED would have had its first ever execution on a real tag push, which is
+    # precisely what the rehearsal exists to prevent. Found by re-reading this file rather
+    # than by running it.
+    #
+    # So a dry run now proves the risky half -- that the artifact from a CALLED workflow is
+    # downloadable here, that the CD is where it is expected inside the package, and what the
+    # asset would be named -- and writes nothing. The release write stays gated on the tag.
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -128,10 +134,14 @@ jobs:
           name: release-oci-charts
           path: dist
 
-      - name: Attach the stamped CompositionDefinition to the release
+      - name: Stage the stamped CompositionDefinition (and attach it, on a tag)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.ref_name }}
+          # On a dispatch there is no tag and so no release: everything up to the attach runs,
+          # the attach does not. `github.ref_name` would be a BRANCH on a dispatch, and
+          # attaching to a release named after a branch is the mistake this guards.
+          IS_TAG: ${{ github.event_name == 'push' }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -163,6 +173,24 @@ jobs:
             assets+=("$stage/$out")
           done
           [ ${#assets[@]} -gt 0 ] || { echo "no CompositionDefinition in any package"; exit 0; }
+          if [ "${IS_TAG}" != "true" ]; then
+            # The rehearsal's whole value is saying what it WOULD have done, specifically.
+            echo "REHEARSAL -- not a tag, so nothing is attached."
+            for a in "${assets[@]}"; do
+              printf '  would attach %s (%s bytes)\n' "$(basename "$a")" "$(wc -c < "$a" | tr -d ' ')"
+            done
+            # Prove the file is the stamped one rather than a placeholder copy: an unstamped
+            # CHART_VERSION here would mean the upstream stamp did not reach the package, which
+            # is exactly the class of defect a rehearsal should catch before a release.
+            if grep -l 'CHART_VERSION' "${assets[@]}" 2>/dev/null; then
+              echo "::error::the CompositionDefinition still carries the CHART_VERSION"
+              echo "::error::placeholder, so it was packaged unstamped. A real release would"
+              echo "::error::attach an asset pinning a version that does not exist."
+              exit 1
+            fi
+            echo "all staged assets are stamped (no CHART_VERSION placeholder left)"
+            exit 0
+          fi
           # Not `view || create`: release-notes.yaml creates the same release on the same tag
           # push, and losing that race failed glance-kog 0.1.2 with 422 "already exists". The
           # script treats a concurrent create as success and still fails on anything else
