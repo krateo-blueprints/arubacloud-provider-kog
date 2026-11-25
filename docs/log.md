@@ -1,6 +1,6 @@
 ---
 type: Log
-title: krateo-arubacloud-provider-kog — log
+title: arubacloud-provider-kog — log
 description: Curated chronological history of the Aruba Cloud Provider KOG blueprint — notable changes and decisions, not a generated changelog.
 resource: oci://ghcr.io/krateo-blueprints/charts/aruba-network-environment
 tags: [log, history]

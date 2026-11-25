@@ -1,6 +1,6 @@
 ---
 type: ExampleIndex
-title: krateo-arubacloud-provider-kog — examples
+title: arubacloud-provider-kog — examples
 description: Index of the runnable examples under examples/ — self-contained walkthroughs that provision real Aruba Cloud resources through this blueprint.
 resource: oci://ghcr.io/krateo-blueprints/charts/aruba-network-environment
 tags: [examples, composition, cloudserver]

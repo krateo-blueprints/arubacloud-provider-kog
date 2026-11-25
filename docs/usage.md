@@ -1,6 +1,6 @@
 ---
 type: Usage
-title: krateo-arubacloud-provider-kog — usage
+title: arubacloud-provider-kog — usage
 description: Install the krateo oasgen-provider fork, apply the OAS ConfigMaps and RestDefinitions, manage your first resource end to end, and provision a whole environment through the Composition.
 resource: oci://ghcr.io/krateo-blueprints/charts/aruba-network-environment
 tags: [usage, install, restdefinition, composition, kubectl]

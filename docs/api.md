@@ -1,6 +1,6 @@
 ---
 type: API
-title: krateo-arubacloud-provider-kog — API
+title: arubacloud-provider-kog — API
 description: The CRD contracts this blueprint relies on and produces — the RestDefinition CRD it authors, the CompositionDefinition CRD for whole-environment provisioning, and the per-resource CRDs oasgen-provider generates from them.
 resource: oci://ghcr.io/krateo-blueprints/charts/aruba-network-environment
 tags: [api, crd, restdefinition, compositiondefinition, restaction]
