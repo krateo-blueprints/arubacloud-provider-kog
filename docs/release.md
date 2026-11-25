@@ -45,6 +45,73 @@ a version can never be committed, drift from the tag, or be bumped in one file a
 forgotten in another. `scripts/validate.py` lints a copy with the placeholder
 substituted, so `helm lint` still passes on an unstamped tree.
 
+### What this caller must supply, and why both omissions are invisible
+
+Two things the shared workflow needs from the caller. Both were missing when 0.5.0 was
+first attempted, and **neither fails in a way you can debug from the API.**
+
+**`permissions: {contents: read, packages: write}` on the calling job.** A called
+workflow's permissions are capped at its caller's, and this repository's
+`default_workflow_permissions` is `read`. Without the block the run is refused before any
+job starts:
+
+```
+Invalid workflow file: .github/workflows/release-oci.yaml (Line: 79, Col: 3):
+Error calling workflow '...release-oci.yaml@aa90d48...'. The workflow is requesting
+'packages: write', but is only allowed 'packages: read'.
+```
+
+A `startup_failure` has **no jobs, no logs and no annotations**. `gh run view --log`
+answers `log not found`; `/actions/runs/{id}/jobs` is `[]`; the check suite has zero check
+runs; `/actions/runs/{id}` carries no error field. **The message exists only in the run
+page's HTML**, so `curl` the `html_url` and grep it. Do not first check SHA reachability,
+the callee's input and secret signature, its outputs, every `uses:` ref, the nested
+composite actions and the organisation Actions policy — that was done, and all of it was
+healthy.
+
+**`chart_version`, for a dispatch.** The shared workflow derives the version from the
+caller's ref when this is empty. A tag push's ref *is* the version; a dispatch's ref is a
+**branch**, so a rehearsal from `main` resolves the version to the literal string `main`
+and the shared release-preflight refuses it (PUBLISHING.md rules 12 and 13). Hence:
+
+```yaml
+chart_version: ${{ github.event_name == 'workflow_dispatch' && inputs.chart_version || '' }}
+```
+
+It is deliberately optional rather than required: left empty it fails loudly before
+anything is pushed, and the shared preflight checks the value better than a form field —
+including on the tag-push path, where no form exists.
+
+**So the order for a first release is `merge` → `dispatch a dry run WITH a version` →
+`tag`.** The dispatch cannot come first, because `workflow_dispatch` only resolves a
+workflow that exists on the default branch (measured: `HTTP 404: workflow
+release-oci.yaml not found on the default branch`). Both rules are now in
+krateo-blueprints/charts' REPOSITORY.md R5.
+
+### What a dry run does and does not prove
+
+`dry_run: true` skips `collect` and `publish-index` with **`steps=0`** — not no-ops, never
+started. A rehearsal therefore proves the **push** path and says nothing about indexing.
+That is inherent: a dry run cannot publish an index, so no rehearsal can ever cover it.
+
+On the 0.5.0 tag run the index path passed on its own: `index pushed on attempt 1`, and
+the serve-verification loop still logged `attempt 1: not served yet` before converging. **A
+single `not served yet` is normal**, not a failure.
+
+Verify a release from outside the run, not from its green tick: `helm show chart` against
+GHCR, the served `blueprints/index.yaml` fetched with a cache-buster, an HTTP request to
+the URL in the index entry, and the GitHub release's attached asset. All four were checked
+for 0.5.0.
+
+### The release asset is named after the chart, not the folder
+
+`release-assets` attaches `compositiondefinition-<chart-name>.yaml`. Because the chart is
+named `aruba-network-environment`, 0.5.0 attached
+`compositiondefinition-aruba-network-environment.yaml` — where 0.4.0 attached
+`compositiondefinition-compositions.yaml`, named after the old `compositions/` folder.
+**Anyone pinning that filename sees it disappear at 0.5.0.** It is a direct consequence of
+the R2 move, so any repository doing the same move inherits the same rename.
+
 ### What the number means here
 
 This blueprint's version tracks **the evidence, not the code**. The manifests are

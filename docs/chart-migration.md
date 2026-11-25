@@ -30,7 +30,7 @@ SHA's.
 | Rule | What it requires | Here | |
 |---|---|---|---|
 | R1 | `<vendor>-provider-kog`, and **no `krateo-` prefix** | `krateo-arubacloud-provider-kog` | **deviates** |
-| R2 | one chart, at `chart/`; a config chart at `config-chart/`; no other chart | the chart is at `compositions/aruba-network-environment/` | **deviates** |
+| R2 | one chart, at `chart/`; a config chart at `config-chart/`; no other chart | the chart is at `chart/` | **satisfied, 2026-11-25** |
 | R2 | a never-shipped chart lives under a test/example directory name | `tests/compositions/no-create-rollup/` and `examples/network-environment/` | satisfied |
 | R3 | a `chart/` that carries a `compositiondefinition.yaml` is named after what it provisions, and carries `krateo.io/source-repo` | named `aruba-network-environment`, which is what it provisions — but **no annotation** | **deviates on the annotation only** (see [the amendment](#the-amendment-that-removed-step-3)) |
 | R3 | `home` **and** `sources` name the repository | `sources` does; there is **no `home` key** | **deviates** |
@@ -204,7 +204,31 @@ here, for every repository"* — not exempted in this repository's workflow.
 Three changes, smallest and most reversible first. Steps 1 and 2 are pull requests.
 Step 3 is not.
 
-### Step 1 — R2 only: move the chart, keep its name
+### Step 1 — R2 only: move the chart, keep its name — **DONE, released in 0.5.0**
+
+Merged as #130 on 2026-11-25 and released in **0.5.0**. The prediction below that a bare
+`git mv` goes green-and-silent was **wrong and was corrected in place before the move**: it
+goes RED, on a stale generated file and three dead `docs/llms.txt` entries. The hazard is
+the *careful-looking* move, not the careless one.
+
+Confirmed by the shared release itself rather than by this repository's own CI, which is
+the only check that could have caught a discovery mismatch:
+
+```
+First-class charts: ./chart
+./chart: ships ./chart/compositiondefinition.yaml, stamped 0.5.0
+Successfully packaged chart and saved it to: dist/aruba-network-environment-0.5.0.tgz
+aruba-network-environment-0.5.0.tgz: carries aruba-network-environment/compositiondefinition.yaml
+  installing oci://ghcr.io/krateo-blueprints/charts/aruba-network-environment 0.5.0
+```
+
+Exactly one chart discovered, `tests/` and `examples/` pruned as designed, and the
+published **name unchanged** — which is what the R3 amendment was for, and why no cluster
+had to be touched. One consequence not foreseen here: the release **asset** is named after
+the chart, so the move renamed it from `compositiondefinition-compositions.yaml` to
+`compositiondefinition-aruba-network-environment.yaml`. See `docs/release.md`.
+
+The original plan, kept because the reasoning is the point:
 
 `compositions/aruba-network-environment/` → `chart/`, and
 `compositions/compositiondefinition.yaml` → `chart/compositiondefinition.yaml`.
