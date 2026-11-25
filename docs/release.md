@@ -29,9 +29,12 @@ spec:
 
 **The repository is versioned by git tag, and the tag is the only source of truth.**
 
-`.github/workflows/release-tag.yaml` fires on any tag matching `[0-9]+.[0-9]+.[0-9]+`.
-It discovers every `Chart.yaml`, substitutes the `CHART_VERSION` placeholder with the
-tag, and publishes each chart as an OCI artifact:
+`.github/workflows/release-oci.yaml` fires on any tag matching `[0-9]+.[0-9]+.[0-9]+`.
+It is a thin caller: the shared `krateo-platformops/.github` release-oci workflow discovers
+every `Chart.yaml` (pruning `tests/`, `examples/` and the rest of its list), substitutes the
+`CHART_VERSION` placeholder with the tag, publishes each chart as an OCI artifact, **and**
+indexes it. Only the GitHub-release asset job stays in this repo, because a called
+workflow's permissions are capped at its caller's:
 
 ```
 oci://ghcr.io/krateo-blueprints/charts/<chart-name>:<tag>
@@ -140,10 +143,36 @@ apart.
 
 ### The chart-push pin must stay at or after the argv fix
 
-`release-tag.yaml` pins
-`krateo-platformops/.github/.github/actions/chart-push@e1d3e99215e80ae56eca4a67e9e061b2c73168b8`
-(tag 1.0.0, byte-identical to `653ac1e6` where the fix landed — verified with `cmp`, not only by hash).
-**Do not move it backwards.** Commit `5f126b7d`, pinned here briefly on 2026-11-18, put the
+**THIS REPO NO LONGER PINS `chart-push`, AND THE RULE IS NO LONGER A RULE — IT IS A TEST.**
+Since the release-oci migration the pin lives in the shared workflow
+(`chart-push@88eaff13555233606da5ff3ff3bfed8f534436ce`), and since 2026-11-22 the property
+below is **enforced by contents in `krateo-platformops/.github` CI** rather than by anyone
+remembering this paragraph:
+
+* `.github/scripts/pinned_chart_push_test.py` finds **every distinct chart-push commit pinned
+  under `.github/workflows`**, extracts the action directory at that commit, puts *today's*
+  `push_test.py` beside it and runs it there — so a pin moved backwards, or to a branch, is
+  tested against current cases rather than against whatever shipped with it;
+* `test-pinned-chart-push.yaml` runs it on any workflow or chart-push change, and **requires
+  a negative control**: `5f126b7` must be REFUSED, naming `push.sh:69` (`-u
+  user:${…PASSWORD}`) and `:73` (`-H Authorization`). A check that cannot fail proves
+  nothing, which is why the control is part of the gate rather than a comment;
+* it fails as **VOID, distinctly**, when the pinned commits are not in the clone — so "could
+  not test" never reads as "passed".
+
+So moving that pin backwards now turns the shared repo's CI red. That is strictly better than
+this paragraph, and this paragraph exists only to carry the finding the test's name cannot.
+
+**The finding.** Commit `5f126b7d`, pinned here briefly on 2026-11-18, put the registry
+credential on curl's command line, so it sat in process argv readable by any other process in
+the same job. Never echoed, never written to a file, pull-scoped — but an exposure the bare
+`helm push` it replaced did not have.
+
+**The pin this repo inherits was verified, not assumed:** `88eaff13`'s `push.sh` is
+**byte-identical** to the `e1d3e99215e80ae56eca4a67e9e061b2c73168b8` this repo vetted (tag
+1.0.0, itself byte-identical to `653ac1e6` where the fix landed) — `cmp` on 2026-11-22, both
+130 lines, three `-K -` stdin configs, no argv bearer header. If it ever moves again, verify
+by **contents**, not by ancestry. Commit `5f126b7d`, pinned here briefly on 2026-11-18, put the
 registry credential on curl's command line — `-u user:pass` and
 `-H "Authorization: Bearer ..."` — so both sat in process argv, readable by any other
 process in the same job. Never echoed, never written to a file, pull-scoped, but an

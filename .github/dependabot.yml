@@ -1,6 +1,6 @@
 # Keep the pinned GitHub Actions current.
 #
-# This exists because release-tag.yaml calls a reusable workflow in another
+# This exists because release-oci.yaml calls a reusable workflow in another
 # repository pinned BY COMMIT SHA, and that workflow receives an org-wide write
 # token (CHARTS_PUBLISH_TOKEN). A SHA pin is what stops a moving tag from handing
 # that token to code nobody reviewed -- and the cost of a SHA pin is that nothing

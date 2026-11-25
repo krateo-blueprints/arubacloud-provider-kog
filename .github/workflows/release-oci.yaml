@@ -1,0 +1,231 @@
+# Publishes this repo's charts on a semver tag: to GHCR, and into the krateo-blueprints
+# helm index. Replaces release-tag.yaml, whose five pre-push guards are now in the shared
+# workflow rather than in a private copy here -- R5 of krateo-blueprints' REPOSITORY.md.
+#
+# WHAT MOVED AND WHAT DID NOT. release-tag.yaml did three things; release-oci absorbs two:
+#
+#   package-and-push   -> the shared workflow. Its guards supersede the five this repo kept:
+#                         index credential present, no whitespace in it, the index content
+#                         gate run BEFORE the push, the preflight ordered by `needs:` rather
+#                         than by step order, and an unstamped-placeholder check this repo
+#                         never had (helm accepts any string as appVersion, so a placeholder
+#                         would otherwise package, push AND publish).
+#   publish-to-index   -> the shared workflow, since 2.1.0. A caller that also published
+#                         would DOUBLE-PUBLISH, which is why that job is gone rather than
+#                         kept "just in case".
+#   release assets     -> STAYS HERE, below, and must. A called workflow's permissions are
+#                         capped at its caller's and custom secrets are not inherited down a
+#                         nested call, so a job inside release-oci could never write a
+#                         release body. release-oci documents this as the pattern and does no
+#                         release-asset handling at all.
+#
+# THE PIN IS A COMMIT, NOT A TAG, and the comment form is not cosmetic: this repo's
+# pinned-uses check accepts only `# X.Y.Z` or `# main YYYY-MM-DD` (verified against the
+# regex at the 1.4.3 this repo pins, not only at main). The upstream's own suggested
+# comment carried a full timestamp, which that check REFUSES -- so the date here is the
+# commit's date, to the day.
+#
+# TRANSITIONAL FORM. `# main 2026-11-22` is the branch-commit form, used because 2.1.0 is
+# not tagged yet: acmp tags it on THIS SAME commit once this repo's first index-path release
+# passes, after which only the comment changes to `# 2.1.0` and the SHA stays put. What was
+# tested is then byte-for-byte what is released.
+#
+# DO NOT BUMP THIS PIN UNTIL `2.1.0` EXISTS ON aa90d48 -- AND THE DANGEROUS BUMP LOOKS LIKE
+# AN UPGRADE. Dependabot does not offer newer COMMITS of a SHA pin; it offers newer release
+# TAGS. Measured 2026-11-23: upstream has 5 tags, the newest being `2.0.0`, and it points at
+# `7da11cb60cee`, which `compare` reports as `status=ahead ahead_by=6 behind_by=0` relative
+# to this pin -- i.e. 2.0.0 is an ANCESTOR of aa90d48.
+#
+# So a PR titled "bump ... to 2.0.0" would move this pin SIX COMMITS BACKWARDS, onto the
+# index path that indexes only the charts PUSHED in a run. That is the defect aa90d48 fixes:
+# a release that pushes and then fails to index can never be finished by re-running it,
+# because the re-run skips the push and therefore skipped the index. Taking "2.0.0" would
+# throw away the exact property this release exists to prove, while reading as an upgrade in
+# the PR title.
+#
+# CLOSE such a PR. After 2.1.0 is tagged on aa90d48 the version ordering stops lying and
+# bumping is ordinary again. (The earlier version of this note said the risk was newer
+# commits that "do not touch the index path" -- wrong in the direction that matters, and
+# corrected by acmp.)
+#
+# WHY THIS SHA AND NOT AN EARLIER ONE -- three candidates were superseded before anyone
+# pinned them, and the second is the instructive one:
+#   3892b82c  the indexing scope question was still open
+#   b030d3f9  announced with main's CI GREEN ON ALL 7, and still failed package-and-push at
+#             JOB SETUP for every caller: it staged krateo-blueprints/charts as a step action
+#             and a dangling-symlink fixture broke the archive unpacking. A shared workflow's
+#             own CI cannot see this -- action staging happens in the CALLER's job -- so
+#             "upstream CI is green" is not evidence that a caller will start. A caller dry
+#             run is. RUN ONE BEFORE THE FIRST TAG.
+#   7da11cb6  indexed only charts PUSHED in that run, so a release that pushed and then
+#             failed to index could never be finished by re-running it (the re-run skips the
+#             push, so it skipped the index). 2.1.0 indexes every chart of the release.
+name: release-oci
+
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Rehearse: package and gate everything, push and index nothing."
+        type: boolean
+        # TRUE BY DEFAULT ON PURPOSE. A manual run is almost always a rehearsal, and the
+        # expensive mistake is a dispatch that publishes. A tag push is unaffected: the
+        # expression below resolves to false for `push`.
+        default: true
+
+jobs:
+  release:
+    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@aa90d48e1a101d5e9b3e547bca116b97c49513b5 # main 2026-11-22
+    with:
+      # REQUIRED since 2.0.0, and required for a reason worth keeping: an optional input
+      # whose absence silently skipped the index credential check meant a chart left out of
+      # the index was an omission rather than a decision. `none` is the explicit way to say
+      # "deliberately not indexed".
+      index_channel: blueprints
+      # MUST be set explicitly. The default is oci://ghcr.io/krateo-platformops/charts and
+      # this repo publishes to krateo-blueprints. Since 2026-11-22 index-preflight REFUSES
+      # the mismatch for the blueprints and pages channels, compared as written so an
+      # old-org spelling is refused too -- so forgetting fails the preflight rather than
+      # publishing into another org's namespace. Set it anyway; the refusal does not cover
+      # `index_channel: none`.
+      oci_repo: oci://ghcr.io/krateo-blueprints/charts
+      # false for a tag push, the dispatch input for a manual run.
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    secrets:
+      # Tested for presence and for whitespace anywhere before anything is pushed, then used
+      # by the index publish. A green check proves PRESENCE AND SHAPE, NOT VALIDITY: an
+      # expired or wrongly scoped token still fails at index time. It is an ORGANISATION
+      # secret, visible to this repo -- `gh secret list` shows repo secrets only and returns
+      # nothing here, which is not evidence of absence.
+      charts_publish_token: ${{ secrets.CHARTS_PUBLISH_TOKEN }}
+
+  # The stamped CompositionDefinition, attached to the GitHub release. Top-level, for the
+  # permissions reason in the header.
+  release-assets:
+    needs: [release]
+    # RUNS ON A DISPATCH TOO, DELIBERATELY -- the ATTACH step is what is gated on a tag, not
+    # the whole job. An earlier version gated the job on `github.event_name == 'push'`, which
+    # meant a dispatch dry run never exercised it at all: the one part of this migration whose
+    # MECHANISM CHANGED would have had its first ever execution on a real tag push, which is
+    # precisely what the rehearsal exists to prevent. Found by re-reading this file rather
+    # than by running it.
+    #
+    # So a dry run now proves the risky half -- that the artifact from a CALLED workflow is
+    # downloadable here, that the CD is where it is expected inside the package, and what the
+    # asset would be named -- and writes nothing. The release write stays gated on the tag.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # THE SOURCE OF THE CD CHANGED, and the new one is better. release-tag.yaml recorded a
+      # manifest of CD paths during its own stamp step, because it refused to "publish assets
+      # from a re-walk of a tree the packaging step has written to". That stamp step now lives
+      # in release-oci, so the manifest is gone -- and the packages themselves are a stronger
+      # source: the CD inside the archive is the stamped file that was actually pushed, not a
+      # pre-packaging copy of it.
+      - name: Download the packages this release pushed
+        uses: actions/download-artifact@v4
+        with:
+          name: release-oci-charts
+          path: dist
+
+      - name: Stage the stamped CompositionDefinition (and attach it, on a tag)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+          # On a dispatch there is no tag and so no release: everything up to the attach runs,
+          # the attach does not. `github.ref_name` would be a BRANCH on a dispatch, and
+          # attaching to a release named after a branch is the mistake this guards.
+          IS_TAG: ${{ github.event_name == 'push' }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          pkgs=(dist/*.tgz)
+          # An empty artifact is NOT "nothing to publish". release-oci uploads the packages in
+          # both modes with if-no-files-found: error, so an empty dist/ here means the
+          # download or the upload failed, and attaching nothing because a file went missing
+          # is the silent-success shape this repo guards against everywhere else.
+          [ ${#pkgs[@]} -gt 0 ] || {
+            echo "::error::dist/ holds no .tgz, so the release-oci-charts artifact was empty"
+            echo "::error::or did not download. Refusing to treat that as 'no assets'."
+            exit 1; }
+          stage="$(mktemp -d)"; assets=()
+          for tgz in "${pkgs[@]}"; do
+            # <name>/compositiondefinition.yaml, where <name> is the chart. release-oci packs
+            # one from the chart dir OR, failing that, the one in the chart directory's PARENT
+            # (ours is compositions/, beside the chart).
+            #
+            # TWO DIFFERENT UNIQUENESS CHECKS, AND ONLY ONE OF THEM IS UPSTREAM'S. Read out
+            # of ship-cd.sh at the pinned SHA -- not from its header, and not from a summary
+            # of it, both of which sent this comment wrong once each:
+            #   - `verify` LOCATES the CD with `grep -qxF "<name>/compositiondefinition.yaml"`
+            #     (ship-cd.sh:109). That is presence of ONE PATH. It cannot notice a second
+            #     path matching the pattern this loop greps for.
+            #   - It then refuses unless that FILE holds exactly one CD DOCUMENT
+            #     (:112-114, `yq ea '[select(.kind == "CompositionDefinition")] | length'`).
+            # So upstream bounds CDs per FILE; this anchor bounds CD PATHS per ARCHIVE. The two
+            # are complementary, and each earlier version of this comment stated one of them as
+            # if it were the whole truth: first that upstream "refuses a package holding more
+            # than one" (true only of documents inside the file), then that it "checks presence,
+            # not uniqueness" (true only of the path). Without the count below, two matching
+            # paths would make `${cd_path%%/*}` read up to the first slash of a TWO-LINE string
+            # and hand tar a path that is not a path -- a confusing failure, or a wrong asset.
+            #
+            # A PARENT-DIRECTORY CD IS SHARED BY EVERY CHART UNDER THAT PARENT, which is a
+            # trap for the pending chart/ migration rather than for today: with `chart/` and
+            # `config-chart/` at the repository root, one root-level compositiondefinition.yaml
+            # is picked up for BOTH, and verify then refuses config-chart because the CD
+            # installs the other chart. If this repo ever ships a second chart, each CD goes
+            # INSIDE its own chart directory.
+            cd_paths="$(tar -tzf "$tgz" | grep -E '^[^/]+/compositiondefinition\.yaml$' || true)"
+            n_cd="$(printf '%s' "$cd_paths" | grep -c . || true)"
+            [ "${n_cd}" != "0" ] || { echo "no CompositionDefinition in $(basename "$tgz")"; continue; }
+            [ "${n_cd}" = "1" ] || {
+              echo "::error::$(basename "$tgz") holds ${n_cd} CompositionDefinitions:"
+              printf '::error::  %s\n' ${cd_paths}
+              echo "::error::Exactly one is expected. Upstream checks presence, not uniqueness,"
+              echo "::error::so refusing here rather than attaching an arbitrary one."
+              exit 1; }
+            cd_path="${cd_paths}"
+            name="${cd_path%%/*}"
+            tar -xzf "$tgz" -C "$stage" "$cd_path"
+            # Named for the CHART, not for the directory it was authored in. release-tag.yaml
+            # derived this from the parent directory and produced
+            # compositiondefinition-compositions.yaml, which names a folder that the pending
+            # chart/ migration will rename anyway. A consumer-visible asset rename, called out
+            # in the PR rather than slipped in.
+            out="compositiondefinition-${name}.yaml"
+            mv "$stage/$cd_path" "$stage/$out"
+            assets+=("$stage/$out")
+          done
+          [ ${#assets[@]} -gt 0 ] || { echo "no CompositionDefinition in any package"; exit 0; }
+          if [ "${IS_TAG}" != "true" ]; then
+            # The rehearsal's whole value is saying what it WOULD have done, specifically.
+            echo "REHEARSAL -- not a tag, so nothing is attached."
+            for a in "${assets[@]}"; do
+              printf '  would attach %s (%s bytes)\n' "$(basename "$a")" "$(wc -c < "$a" | tr -d ' ')"
+            done
+            # Prove the file is the stamped one rather than a placeholder copy: an unstamped
+            # CHART_VERSION here would mean the upstream stamp did not reach the package, which
+            # is exactly the class of defect a rehearsal should catch before a release.
+            if grep -l 'CHART_VERSION' "${assets[@]}" 2>/dev/null; then
+              echo "::error::the CompositionDefinition still carries the CHART_VERSION"
+              echo "::error::placeholder, so it was packaged unstamped. A real release would"
+              echo "::error::attach an asset pinning a version that does not exist."
+              exit 1
+            fi
+            echo "all staged assets are stamped (no CHART_VERSION placeholder left)"
+            exit 0
+          fi
+          # Not `view || create`: release-notes.yaml creates the same release on the same tag
+          # push, and losing that race failed glance-kog 0.1.2 with 422 "already exists". The
+          # script treats a concurrent create as success and still fails on anything else
+          # (hack/test-publish-release-assets.sh). THIS REPO WON THAT RACE ONCE WITH NOTHING
+          # TO SPARE -- do not simplify it because it looks defensive.
+          bash hack/publish-release-assets.sh "${VERSION}" "${assets[@]}"
+          echo "attached: ${assets[*]}"
