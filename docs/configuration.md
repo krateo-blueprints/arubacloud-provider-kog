@@ -99,7 +99,7 @@ Each `RestDefinition` (`ogen.krateo.io/v1alpha1`) declares:
 
 The `aruba-network-environment` chart takes one high-level input set and fans
 it out into `Vpc` + `Subnet` + `SecurityGroup` + `CloudServer` and their
-Configurations. Values (`compositions/aruba-network-environment/values.yaml`,
+Configurations. Values (`chart/values.yaml`,
 typed by `values.schema.json`):
 
 | Value | Required | Default | Meaning |

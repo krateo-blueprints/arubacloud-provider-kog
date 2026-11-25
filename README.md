@@ -157,7 +157,7 @@ changes. See [OAS policy](docs/oas-patches.md).
 | `configmaps/` | One ConfigMap per provider embedding its spec verbatim (the `oasPath` source) |
 | `restdefinitions/<provider>/` | One `RestDefinition` per manageable resource — **no proxies** |
 | `restactions/compute/` | Snowplow RESTActions that drive `CloudServer`'s multi-call lifecycle (delegated via `*ApiRef`) |
-| `compositions/` | A Krateo `CompositionDefinition` + Helm chart provisioning a whole environment |
+| `chart/` | A Krateo `CompositionDefinition` + Helm chart provisioning a whole environment |
 | `samples/<provider>/` | A `<Kind>Configuration` + a `<Kind>` CR skeleton per resource, plus the shared auth `Secret` |
 | `eso/` | External Secrets `ClusterSecretStore` + `ExternalSecret` that mint and refresh the Aruba token, so nobody pastes a short-lived JWT by hand |
 | `scripts/` | Reproducible generators (`generate_restdefinitions.py`, `gen_configmaps.py`, `gen_samples_and_coverage.py`, `validate.py`) |
@@ -226,7 +226,7 @@ The full old-plugin → native-feature mapping is in the evolution report's
 appendix. The one remaining proxy-shaped need — `compute/CloudServer`'s
 multi-call, action-driven lifecycle — is solved **without a proxy** by delegating
 create/update/delete to Snowplow RESTActions via the fork's `*ApiRef`
-(`restactions/compute/`), with a Krateo Composition (`compositions/`) for
+(`restactions/compute/`), with a Krateo Composition (`chart/`) for
 whole-environment provisioning. See
 [`docs/lifecycle-beyond-crud.md`](docs/lifecycle-beyond-crud.md).
 

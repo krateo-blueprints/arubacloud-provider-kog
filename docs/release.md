@@ -15,7 +15,7 @@ the repository itself). There is no application image.
 
 ## Publishing the Composition chart
 
-The `aruba-network-environment` chart under `compositions/` is packaged and
+The `aruba-network-environment` chart under `chart/` is packaged and
 pushed to GHCR as an OCI artifact. The `CompositionDefinition` points at it:
 
 ```yaml
@@ -91,13 +91,13 @@ the tree carries placeholders rather than numbers:
 
 ```sh
 VERSION=0.2.0
-helm package compositions/aruba-network-environment --version "$VERSION"
+helm package chart --version "$VERSION"
 helm push "aruba-network-environment-${VERSION}.tgz" \
   oci://ghcr.io/krateo-blueprints/charts
 ```
 
-Both `compositions/aruba-network-environment/Chart.yaml` and
-`spec.chart.version` in `compositions/compositiondefinition.yaml` hold the literal
+Both `chart/Chart.yaml` and
+`spec.chart.version` in `chart/compositiondefinition.yaml` hold the literal
 `CHART_VERSION`, which the tag workflow substitutes, so there is nothing to keep in
 sync by hand and no number to forget. A chart-version bump still changes the
 Composition's derived apiVersion/GVK — that is a property of the release, not an
