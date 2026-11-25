@@ -95,6 +95,16 @@ jobs:
         # silently reverts it -- better to fail here than to lose the change later.
         run: |
           python3 scripts/generate_restdefinitions.py
+          # gen_composition.py WAS MISSING, and it is the ONLY generator that writes
+          # chart/templates/_generated.tpl. The step ends in `git diff --quiet`, so an
+          # UNCOMMITTED edit fails it trivially -- which is exactly what hid the gap. A
+          # COMMITTED edit is a clean tree at checkout: the other generators run, none of them
+          # touches that file, the diff is empty, and the step passes.
+          #
+          # Measured on a throwaway branch by committing a hand edit and running precisely the
+          # four commands CI ran: `git diff --quiet` PASSED and the edit survived. It runs here,
+          # after generate_restdefinitions.py, because those definitions are its input.
+          python3 scripts/gen_composition.py
           python3 scripts/gen_configmaps.py
           python3 scripts/gen_samples_and_coverage.py
           python3 scripts/gen_provider_docs.py
