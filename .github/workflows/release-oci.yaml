@@ -25,9 +25,15 @@
 # comment carried a full timestamp, which that check REFUSES -- so the date here is the
 # commit's date, to the day.
 #
-# TRANSITIONAL FORM. `# main 2026-11-22` is the branch-commit form, used because 2.1.0 is
-# not tagged yet: acmp tags it on THIS SAME commit once this repo's first index-path release
-# passes, after which only the comment changes to `# 2.1.0` and the SHA stays put. What was
+# NO LONGER TRANSITIONAL, as of 2026-11-25. This said `# main 2026-11-22` because 2.1.0 was
+# not tagged yet, and predicted that acmp would tag it on THIS SAME commit once this repo's
+# first index-path release passed, after which only the comment would change. That happened:
+# 0.5.0 went out through this pin, publish-index succeeded, and 2.1.0 is now an annotated tag
+# whose target dereferences to exactly aa90d48e -- verified here rather than taken on trust,
+# because a relabel is the change a reviewer has least reason to doubt. The SHA has not moved.
+#
+# 2.2.0 exists (705b79c) and is NOT what this should become: it adds pre-release support for
+# `index_channel: none`, and for any other channel 2.1.0 remains the version. What was
 # tested is then byte-for-byte what is released.
 #
 # DO NOT BUMP THIS PIN UNTIL `2.1.0` EXISTS ON aa90d48 -- AND THE DANGEROUS BUMP LOOKS LIKE
@@ -100,7 +106,7 @@ on:
 
 jobs:
   release:
-    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@aa90d48e1a101d5e9b3e547bca116b97c49513b5 # main 2026-11-22
+    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@aa90d48e1a101d5e9b3e547bca116b97c49513b5 # 2.1.0
     # REQUIRED, AND ITS ABSENCE IS A STARTUP FAILURE, NOT A PUSH FAILURE.
     #
     # A called workflow's permissions are CAPPED AT ITS CALLER'S -- which the header of
