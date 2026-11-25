@@ -67,7 +67,12 @@ GKE_PROJECT="${GKE_PROJECT:-operations-dev-krateo-io}"   # Diego's choice, 2026-
 GKE_ZONE="${GKE_ZONE:-europe-west3-a}"
 GKE_MACHINE="${GKE_MACHINE:-e2-standard-4}"
 GKE_NODES="${GKE_NODES:-2}"
-GKE_DISK_GB="${GKE_DISK_GB:-100}"   # GKE default boot disk; counts against SSD_TOTAL_GB
+GKE_DISK_GB="${GKE_DISK_GB:-100}"   # node BOOT disk; counts against the region's
+                                    # SSD_TOTAL_GB quota, and is PASSED TO THE CREATE.
+                                    # It was preflight-only until 2026-11-25: the quota
+                                    # arithmetic below used it and the create did not, so
+                                    # lowering it made the GUARD pass and left the ACTION
+                                    # asking for GKE's 100GB default. See the create.
 # The chart needs Kubernetes 1.36 (see NODE_IMAGE above). On GKE the patch is SELECTED at run
 # time rather than pinned: a pinned patch silently vanishes from GKE's available list as
 # versions roll, while accepting whatever GKE defaults to is how you get a 1.35 cluster and a
@@ -456,10 +461,22 @@ cluster_create() {
       [ -n "$ver" ] || die "GKE in ${GKE_ZONE} offers no ${GKE_K8S_MINOR}.x master version,
   and the chart requires ${GKE_K8S_MINOR} (see NODE_IMAGE). Choose another zone, or raise
   GKE_K8S_MINOR once the chart supports a newer one."
-      echo "    version ${ver}, ${GKE_NODES}x${GKE_MACHINE} in ${GKE_ZONE}"
+      echo "    version ${ver}, ${GKE_NODES}x${GKE_MACHINE} in ${GKE_ZONE}, ${GKE_DISK_GB}GB boot disk"
+      # --disk-size IS LOAD-BEARING AND WAS MISSING. GKE_DISK_GB fed the SSD quota
+      # preflight above and nothing else, so the preflight was computing a number the
+      # create did not honour: with GKE_DISK_GB=50 and GKE_NODES=2 the guard computed
+      # 100GB, compared it against 118GB of headroom, passed -- and the create then asked
+      # for GKE's DEFAULT 100GB per node, 200GB, and died inside the node pool with
+      # `Quota 'SSD_TOTAL_GB' exceeded. Limit: 500.0 in region europe-west3`.
+      #
+      # Worse than a guard that passes on an empty set, which is the other shape found
+      # today: this guard did its arithmetic correctly and was MIS-CALIBRATED, in the one
+      # direction that admits exactly what it exists to refuse. A variable named for a
+      # thing it does not set reads as configuration at every call site.
       if ! gcloud container clusters create "$CLUSTER" \
              --project "$GKE_PROJECT" --zone "$GKE_ZONE" \
              --cluster-version "$ver" --num-nodes "$GKE_NODES" --machine-type "$GKE_MACHINE" \
+             --disk-size "$GKE_DISK_GB" \
              --no-enable-autoupgrade --no-enable-autorepair \
              --labels=owner=aruba-provider-kog,purpose=pin-verify; then
         # A FAILED create still leaves a cluster object -- in ERROR state, holding its
