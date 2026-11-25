@@ -67,6 +67,29 @@ on:
     tags: ["[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
     inputs:
+      chart_version:
+        # REQUIRED IN PRACTICE FOR A DISPATCH, though declared optional so a tag push does
+        # not have to supply it. The shared release derives the version from the caller's
+        # ref when this is empty, and a dispatch's ref is a BRANCH -- so a rehearsal from
+        # `main` resolves the version to the literal string "main" and the shared
+        # release-preflight refuses the run:
+        #
+        #   ::error::release version 'main' is not a plain X.Y.Z (no v, no leading zeros,
+        #   no -prerelease, no +build). publish-chart.yaml would refuse to index it after
+        #   the GHCR push, so the release is refused here, before anything is pushed
+        #   (PUBLISHING.md rules 12 and 13).
+        #
+        # Measured on run 45587712143: index-preflight and verify-images both passed,
+        # release-preflight refused, and package-and-push, publish-index, collect and
+        # release-assets were all SKIPPED. Nothing was packaged and nothing was pushed --
+        # the guard did exactly what it exists to do, on the rehearsal rather than on a tag.
+        #
+        # Leaving it empty on a dispatch is therefore not a silent no-op: it is a loud
+        # refusal with a precise message. That is why this stays optional rather than
+        # required -- the shared preflight is a better check of the value than a form field,
+        # and it checks the TAG PUSH path too, where no form exists.
+        description: "Version to rehearse, plain X.Y.Z. Leave empty only on a tag push."
+        required: false
       dry_run:
         description: "Rehearse: package and gate everything, push and index nothing."
         type: boolean
@@ -119,6 +142,20 @@ jobs:
       oci_repo: oci://ghcr.io/krateo-blueprints/charts
       # false for a tag push, the dispatch input for a manual run.
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      # On a tag push `inputs` does not exist, the `&&` short-circuits, and the empty
+      # string makes the shared workflow fall back to the caller's ref -- which IS the tag.
+      # On a dispatch it is the value typed above.
+      #
+      # azuredevops-provider-kog, the REPOSITORY.md reference, resolves this in a separate
+      # `preflight` job with an output. That job is not copied here because it earns its
+      # keep there by ALSO checking that the commit passed lint, that both charts still
+      # carry the CHART_VERSION placeholder, and that the oasgen pin is not retracted --
+      # with a control. This repository covers those three elsewhere: the placeholder in
+      # scripts/validate.py, the pin in validate.yaml's `pin not retracted` job, and both
+      # are required status checks on main as of today, so every commit that can reach a
+      # tag has passed them. A whole job boundary and an output for one shell assignment
+      # would be a copy of the pattern without the reasons for it.
+      chart_version: ${{ github.event_name == 'workflow_dispatch' && inputs.chart_version || '' }}
     secrets:
       # Tested for presence and for whitespace anywhere before anything is pushed, then used
       # by the index publish. A green check proves PRESENCE AND SHAPE, NOT VALIDITY: an
