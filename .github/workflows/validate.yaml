@@ -182,6 +182,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        # Declared here, not inherited. This job already runs
+        # `scripts/assert_auth_crds.py`, which imports only the standard library, so
+        # until now the job never had to say what Python it needs and the runner's
+        # system python3 was enough. `scripts/check_samples.py` imports PyYAML. Relying
+        # on the runner image happening to ship python3-yaml would make a sample gate
+        # fail for a reason that has nothing to do with the samples -- and the whole
+        # point of the two steps below is that a sample gate's result means something.
+        # Same two lines as the `static validation` job, on purpose.
+        run: pip install --quiet pyyaml
+
       - name: Create kind cluster
         uses: helm/kind-action@v1
         with:
@@ -347,9 +362,12 @@ jobs:
           # Measured: `iterations=0 fail=0`.
           #
           # scripts/check_samples.py refuses this case explicitly ("NOTHING WAS CHECKED.
-          # A clean result here would mean nothing."), but it is a MANUAL tool -- it is
-          # referenced only in docs and in its own usage text, and runs in no workflow.
-          # So this loop is the only sample gate CI has, and it must not pass empty.
+          # A clean result here would mean nothing."). It used to be a MANUAL tool that
+          # ran in no workflow -- which is why this loop had to carry the whole weight
+          # and had to stop passing empty. It now runs in the two steps below, so this
+          # loop is no longer the only sample gate. It still must not pass empty: this
+          # is the apiserver's own verdict, and the apiserver is the authority on what
+          # it will accept. The steps below are not a replacement for it.
           [ -d samples ] || { echo "::error::samples/ is not a directory"; exit 1; }
           n_samples="$(find samples -name '*.yaml' | wc -l | tr -d ' ')"
           echo "samples to validate: ${n_samples}"
@@ -366,6 +384,49 @@ jobs:
           done
           echo "validated ${n_samples} sample(s) against the generated CRDs"
           exit $fail
+
+      - name: The sample type-check can disagree
+        # The control for the step that follows, and it runs FIRST so that a green
+        # result below cannot be read without it. `--prove` builds eight synthetic
+        # sample/CRD pairs in memory -- no cluster, no CRDs, no samples -- and requires
+        # the comparison to complain about six and stay quiet on two. If the comparison
+        # ever goes inert, this fails here and the step below never gets to report a
+        # clean run over 72 CRs that it did not really examine.
+        #
+        # Two of the six are the breaks that justified writing the script: Aruba ships
+        # `KaasPropertiesDto.autoscalerProfile` and `AlertInfo.theshold` as bare
+        # `{"nullable": true}` with no `type`, a structural CRD must give every node a
+        # type, so both become `type: object` and a sample sending a string into them is
+        # wrong. We do not touch Aruba's OAS, so this is permanent.
+        run: python3 scripts/check_samples.py --prove
+
+      - name: Samples type-check against the generated CRDs
+        # NOT a second opinion on the dry-run above. It reads the same CRDs out of the
+        # same cluster and asks two things the apiserver does not answer:
+        #
+        #   1. A DENOMINATOR. The loop above prints "validated 73 sample(s)" and means
+        #      73 FILES. Measured on this tree: 73 files hold 75 YAML documents --
+        #      samples/container/kaas.yaml and samples/database/databaseuser.yaml carry
+        #      two each -- of which 72 are CRs in arubacloud.ogen.krateo.io and 3 are
+        #      prerequisite `v1` Secrets. So the figure the loop prints is not the
+        #      number of provider CRs it proved anything about, and the two differ by
+        #      more than one. This step prints `indexed N (group, version, kind)`,
+        #      `checked N sample CR(s)` and `not ours to check (N)`, and FAILS on a
+        #      sample in our group with no CRD to check against -- which is the
+        #      difference between "nothing was wrong" and "nothing was looked at".
+        #
+        #   2. A null on a NON-NULLABLE field. The apiserver PRUNES it: the dry-run
+        #      above passes, the field silently disappears, and any default applies
+        #      instead. That failure is invisible to `kubectl apply --dry-run=server`
+        #      by design, and it is not hypothetical here -- a partial `spec.properties`
+        #      already makes a Vpc claim the region-unique default role at the current
+        #      pin.
+        #
+        # No --context, for the reason the auth-CRD step above gives: every step in this
+        # job uses the ambient context kind-action sets, and naming it here would be a
+        # second place for cluster_name to drift. No --partial: this cluster has all 36
+        # RestDefinitions applied, so a missing CRD is a failure and not a known gap.
+        run: python3 scripts/check_samples.py --from-cluster
 
       - name: Composition charts render against the generated CRDs
         # The gap that let a broken chart ship twice. `helm lint` and `helm template`
