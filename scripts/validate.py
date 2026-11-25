@@ -1784,10 +1784,29 @@ def validate_composition_generated(errors):
                       "gen_composition.py --check failed")
 
 
+# REPOSITORY.md R2: the shipped chart is at `chart/`, a config chart would be at
+# `config-chart/`, and there is no other shipped chart. So this is an explicit list of
+# known paths rather than a glob: a glob answers "what is there", and what this gate
+# needs to know is "is what must be there, there".
+SHIPPED_CHARTS = ("chart", "config-chart")
+
+
 def validate_charts(errors):
-    """helm lint + helm template each Composition chart; render must be valid YAML."""
-    chart_dirs = sorted(os.path.dirname(f) for f in glob.glob("compositions/**/Chart.yaml", recursive=True))
+    """helm lint + helm template each shipped chart; render must be valid YAML."""
+    chart_dirs = [d for d in SHIPPED_CHARTS if os.path.isfile(os.path.join(d, "Chart.yaml"))]
     if not chart_dirs:
+        # NOT `return 0`. It used to be, with a `compositions/**/Chart.yaml` glob, and that
+        # pairing is how this gate disarms itself: move the chart and the glob matches
+        # nothing, so helm lint and helm template stop running AND the validator still
+        # exits 0, reporting "0 chart(s)" in a summary line nobody reads on a green build.
+        # Measured on this branch's first two commits before it was changed.
+        #
+        # `chart/Chart.yaml` is not optional here -- it is what R2 requires and what the
+        # release packages -- so its absence is a failure, not an empty set.
+        errors.append(
+            "no shipped chart found: expected chart/Chart.yaml (REPOSITORY.md R2). "
+            "If the chart moved, this gate and .github/workflows/validate.yaml's "
+            "render-against-the-CRDs loop both need the new path -- neither follows it.")
         return 0
     helm = find_helm()
     if not helm:

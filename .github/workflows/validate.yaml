@@ -332,7 +332,22 @@ jobs:
         run: |
           set -uo pipefail
           fail=0
-          for chart in compositions/*/; do
+          # EXPLICIT LIST, NOT A GLOB, and no `|| continue` on a missing chart.
+          # This was `for chart in compositions/*/` with a `[ -f ... ] || continue`
+          # guard. With no `nullglob`, a glob that matches nothing stays LITERAL, so the
+          # loop iterated once, the guard skipped it, `fail` stayed 0 and this job went
+          # green having checked nothing -- the one gate that exists because a broken
+          # chart shipped twice, silently disarmed by moving a directory. Measured on
+          # this branch (`iterations=1 fail=0`), not inferred.
+          #
+          # REPOSITORY.md R2 fixes the set of shipped charts, so the paths are named.
+          # `chart/` is required; `config-chart/` is checked only if present.
+          [ -f chart/Chart.yaml ] || {
+            echo "::error::chart/Chart.yaml is missing. R2 requires the shipped chart at"
+            echo "::error::chart/. If it moved, update this loop AND validate.py's"
+            echo "::error::SHIPPED_CHARTS -- neither follows the chart."
+            exit 1; }
+          for chart in chart/ config-chart/; do
             [ -f "${chart}Chart.yaml" ] || continue
             work=$(mktemp -d)
             cp -r "$chart" "$work/c"
