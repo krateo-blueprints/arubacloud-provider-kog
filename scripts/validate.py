@@ -1814,16 +1814,30 @@ def validate_charts(errors):
         print("         install with: go install helm.sh/helm/v3/cmd/helm@latest")
         return 0
     for d in chart_dirs:
-        # The chart carries `version: CHART_VERSION`, a placeholder the release workflow
-        # substitutes with the git tag. helm rejects it as invalid SemVer, so lint/template a
-        # COPY with a stand-in version -- exactly what the release does -- rather than skipping
-        # validation or forcing the chart to carry a throwaway version in git.
+        # The chart carries `version: CHART_VERSION` AND `appVersion: CHART_VERSION`,
+        # placeholders the release workflow substitutes with the git tag. helm rejects an
+        # invalid SemVer in `version`, so lint/template a COPY with a stand-in rather than
+        # skipping validation or carrying a throwaway version in git.
+        #
+        # THE SUBSTITUTION IS GLOBAL, AND THAT IS THE WHOLE POINT. It used to be
+        #     re.sub(r"^version:\s*CHART_VERSION\s*$", "version: 0.0.0", txt, flags=re.M)
+        # anchored to `version:`, while its comment claimed it did "exactly what the release
+        # does". The release does `sed "s/CHART_VERSION/${CHART_VERSION}/g"` -- globally. So
+        # the moment `appVersion` became a placeholder too, the anchored form would have left
+        # `appVersion: CHART_VERSION` literal in the linted copy, and **helm accepts that
+        # without a word**: `version` must be SemVer, `appVersion` is a free string. The lint
+        # would pass on a chart no release would ever produce.
+        #
+        # This is REPOSITORY.md R4's named hazard, quoted because it predicted this exactly:
+        # "Every step that stamps the placeholder substitutes it globally: a substitution
+        # anchored to `version:` silently leaves `appVersion` as the literal placeholder, and
+        # helm accepts that without a word."
         with tempfile.TemporaryDirectory() as tmp:
             work = os.path.join(tmp, os.path.basename(d))
             shutil.copytree(d, work)
             cf = os.path.join(work, "Chart.yaml")
             txt = open(cf).read()
-            open(cf, "w").write(re.sub(r"^version:\s*CHART_VERSION\s*$", "version: 0.0.0", txt, flags=re.M))
+            open(cf, "w").write(txt.replace("CHART_VERSION", "0.0.0").replace("SOURCE_REF", "0.0.0"))
 
             lint = subprocess.run([helm, "lint", work], capture_output=True, text=True)
             if lint.returncode != 0:
