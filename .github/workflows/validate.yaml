@@ -310,12 +310,32 @@ jobs:
         run: |
           set -uo pipefail
           fail=0
+          # SAME SELF-DISARMING SHAPE AS THE CHART LOOP BELOW, found by sweeping this
+          # file after fixing that one. `for f in $(find samples ...)` over a missing or
+          # empty `samples/` iterates ZERO times, leaves fail=0, and exits 0 having
+          # validated nothing -- and `find`'s own error about the missing directory goes
+          # to stderr inside a command substitution, where its exit status is discarded.
+          # Measured: `iterations=0 fail=0`.
+          #
+          # scripts/check_samples.py refuses this case explicitly ("NOTHING WAS CHECKED.
+          # A clean result here would mean nothing."), but it is a MANUAL tool -- it is
+          # referenced only in docs and in its own usage text, and runs in no workflow.
+          # So this loop is the only sample gate CI has, and it must not pass empty.
+          [ -d samples ] || { echo "::error::samples/ is not a directory"; exit 1; }
+          n_samples="$(find samples -name '*.yaml' | wc -l | tr -d ' ')"
+          echo "samples to validate: ${n_samples}"
+          [ "${n_samples}" -gt 0 ] || {
+            echo "::error::found 0 sample YAML files under samples/. A green result here"
+            echo "::error::would mean only that nothing was looked at. If samples moved,"
+            echo "::error::update this step."
+            exit 1; }
           for f in $(find samples -name '*.yaml'); do
             if ! out=$(kubectl apply --dry-run=server -f "$f" 2>&1); then
               echo "::error file=${f}::${out}"
               fail=1
             fi
           done
+          echo "validated ${n_samples} sample(s) against the generated CRDs"
           exit $fail
 
       - name: Composition charts render against the generated CRDs
