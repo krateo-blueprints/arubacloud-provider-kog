@@ -129,7 +129,7 @@ jobs:
       # source: the CD inside the archive is the stamped file that was actually pushed, not a
       # pre-packaging copy of it.
       - name: Download the packages this release pushed
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-oci-charts
           path: dist
