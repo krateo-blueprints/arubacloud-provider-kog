@@ -78,6 +78,32 @@ on:
 jobs:
   release:
     uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@aa90d48e1a101d5e9b3e547bca116b97c49513b5 # main 2026-11-22
+    # REQUIRED, AND ITS ABSENCE IS A STARTUP FAILURE, NOT A PUSH FAILURE.
+    #
+    # A called workflow's permissions are CAPPED AT ITS CALLER'S -- which the header of
+    # this very file already states, about release assets. The same sentence applies here
+    # and was not acted on. This repository's default_workflow_permissions is `read`, so
+    # without this block the cap is `packages: read`, release-oci asks for
+    # `packages: write` to push to GHCR, and GitHub refuses the whole workflow before any
+    # job starts:
+    #
+    #   Invalid workflow file: .github/workflows/release-oci.yaml (Line: 79, Col: 3):
+    #   Error calling workflow '...release-oci.yaml@aa90d48e...'. The workflow is
+    #   requesting 'packages: write', but is only allowed 'packages: read'.
+    #
+    # Measured: two dispatches, both `startup_failure` in under 3 seconds, with NO jobs,
+    # NO logs and NO annotations on any API endpoint. `gh run view --log` answers
+    # "log not found"; the check suite has zero check runs. The message exists only in the
+    # run page's HTML. A caller that forgets this does not get a red step to read -- it
+    # gets a run that never began and an API that cannot say why.
+    #
+    # azuredevops-provider-kog, which REPOSITORY.md names as the reference, has carried
+    # this block all along. Diffing against it produced the answer before the error text
+    # did, and it was dismissed on the incorrect reasoning that a permissions shortfall
+    # surfaces at push time.
+    permissions:
+      contents: read      # read the tag and the chart sources
+      packages: write     # push the chart to ghcr.io/krateo-blueprints/charts
     with:
       # REQUIRED since 2.0.0, and required for a reason worth keeping: an optional input
       # whose absence silently skipped the index credential check meant a chart left out of
