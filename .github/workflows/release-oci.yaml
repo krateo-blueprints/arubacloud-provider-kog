@@ -160,13 +160,21 @@ jobs:
             # one from the chart dir OR, failing that, the one in the chart directory's PARENT
             # (ours is compositions/, beside the chart).
             #
-            # UNIQUENESS IS THIS ANCHOR'S JOB, NOT THE UPSTREAM'S. An earlier version of this
-            # comment claimed release-oci "refuses to push a package holding more than one".
-            # It does not: ship-cd.sh's verify uses `grep -qxF` and checks PRESENCE, not
-            # uniqueness (confirmed by acmp, who owns it). So two matches here would make
-            # `${cd_path%%/*}` read up to the first slash of a TWO-LINE string and hand tar a
-            # path that is not a path -- a confusing failure, or worse a wrong asset. Counted
-            # and refused explicitly instead.
+            # TWO DIFFERENT UNIQUENESS CHECKS, AND ONLY ONE OF THEM IS UPSTREAM'S. Read out
+            # of ship-cd.sh at the pinned SHA -- not from its header, and not from a summary
+            # of it, both of which sent this comment wrong once each:
+            #   - `verify` LOCATES the CD with `grep -qxF "<name>/compositiondefinition.yaml"`
+            #     (ship-cd.sh:109). That is presence of ONE PATH. It cannot notice a second
+            #     path matching the pattern this loop greps for.
+            #   - It then refuses unless that FILE holds exactly one CD DOCUMENT
+            #     (:112-114, `yq ea '[select(.kind == "CompositionDefinition")] | length'`).
+            # So upstream bounds CDs per FILE; this anchor bounds CD PATHS per ARCHIVE. The two
+            # are complementary, and each earlier version of this comment stated one of them as
+            # if it were the whole truth: first that upstream "refuses a package holding more
+            # than one" (true only of documents inside the file), then that it "checks presence,
+            # not uniqueness" (true only of the path). Without the count below, two matching
+            # paths would make `${cd_path%%/*}` read up to the first slash of a TWO-LINE string
+            # and hand tar a path that is not a path -- a confusing failure, or a wrong asset.
             #
             # A PARENT-DIRECTORY CD IS SHARED BY EVERY CHART UNDER THAT PARENT, which is a
             # trap for the pending chart/ migration rather than for today: with `chart/` and
