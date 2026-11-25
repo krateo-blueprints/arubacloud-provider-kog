@@ -14,13 +14,44 @@ description: >-
   See scripts/gen_composition.py's KINDS comment for the full reasoning.
 type: application
 version: CHART_VERSION
-appVersion: "1.0.0"
+# BOTH placeholders, which is REPOSITORY.md R4's default shape, and the literal `1.0.0`
+# this replaced is the drift R4 cites: it was hand-maintained, nothing updated it, and
+# 0.2.0 through 0.5.0 all published `version: 0.x.0` beside `appVersion: 1.0.0`.
+#
+# Safe here only because NOTHING CONSUMES IT. Checked before changing it: `.Chart.AppVersion`
+# appears nowhere in chart/, and the `rdc.image.tag` derived from an appVersion -- described
+# in README.md, docs/usage.md, docs/getting-started.md and docs/troubleshooting.md -- is the
+# OASGEN-PROVIDER chart's own appVersion, not this chart's. Four docs say "the chart derives
+# rdc.image.tag from its own appVersion" and none of them means this chart.
+#
+# Making it a placeholder also ACTIVATES a release gate that was dormant: release-oci counts
+# the placeholder occurrences in `.appVersion` and only verifies the packaged appVersion
+# against the release version when that count is nonzero. With a literal it never checked.
+# From now on it does.
+#
+# (The token is not spelled out in these comments on purpose: the release stamps Chart.yaml
+# with a GLOBAL sed, so a comment naming it ships as `grep -c 0.6.0` -- a published artifact
+# carrying a comment the release itself corrupted. Verified by running the sed.)
+appVersion: CHART_VERSION
 # An absolute https icon is required by the krateo-blueprints publishing standard and
 # the Marketplace shows it. Krateo's own brand asset rather than Aruba's: hotlinking a
 # vendor's logo is not ours to decide. Verified to serve image/svg+xml, and note the
 # HYPHENATED org -- krateoplatformops/.github 404s, the same install-source confusion
 # scripts/validate.py already screens for in the install docs.
 icon: https://raw.githubusercontent.com/krateo-platformops/.github/main/brand/logo.svg
+# R3: `home` and `sources` both name the publishing repository. `sources` was already
+# correct; this adds the `home` R3 also requires. Both name TODAY's repository name --
+# krateo-arubacloud-provider-kog, R1 deviation and all -- because R1 and R3 land together
+# and a field naming a repository that does not exist yet is worse than one naming the
+# repository that does.
+home: https://github.com/krateo-blueprints/krateo-arubacloud-provider-kog
+# The annotation R3 asks a chart to carry so the published artifact says where its source
+# is without a reader having to resolve `sources`. Same value, deliberately: if the
+# repository is renamed, these three strings move in ONE pull request, merged right after
+# the GitHub rename with no release tagged in between (REPOSITORY.md, "Changing a published
+# name"). A GitHub redirect does NOT satisfy publish-chart, which compares the string.
+annotations:
+  krateo.io/source-repo: https://github.com/krateo-blueprints/krateo-arubacloud-provider-kog
 # The publisher REFUSES a chart whose `sources` does not list its publishing
 # repository -- that is how it enforces one owner per chart name, so a second repo
 # cannot quietly take over `aruba-network-environment`.

@@ -32,9 +32,9 @@ SHA's.
 | R1 | `<vendor>-provider-kog`, and **no `krateo-` prefix** | `krateo-arubacloud-provider-kog` | **deviates** |
 | R2 | one chart, at `chart/`; a config chart at `config-chart/`; no other chart | the chart is at `chart/` | **satisfied, 2026-11-25** |
 | R2 | a never-shipped chart lives under a test/example directory name | `tests/compositions/no-create-rollup/` and `examples/network-environment/` | satisfied |
-| R3 | a `chart/` that carries a `compositiondefinition.yaml` is named after what it provisions, and carries `krateo.io/source-repo` | named `aruba-network-environment`, which is what it provisions — but **no annotation** | **deviates on the annotation only** (see [the amendment](#the-amendment-that-removed-step-3)) |
-| R3 | `home` **and** `sources` name the repository | `sources` does; there is **no `home` key** | **deviates** |
-| R4 | a provider chart's `version` and `appVersion` are both `CHART_VERSION` | `version: CHART_VERSION`, `appVersion: "1.0.0"` hand-maintained | see [appVersion](#appversion) |
+| R3 | a `chart/` that carries a `compositiondefinition.yaml` is named after what it provisions, and carries `krateo.io/source-repo` | named `aruba-network-environment`, and the annotation is present | **satisfied, 2026-11-25** |
+| R3 | `home` **and** `sources` name the repository | both name `krateo-blueprints/krateo-arubacloud-provider-kog` | **satisfied, 2026-11-25** |
+| R4 | a provider chart's `version` and `appVersion` are both `CHART_VERSION` | both are `CHART_VERSION` | **satisfied, 2026-11-25** — see [appVersion](#appversion) |
 | R5 | the release is the shared `release-oci` with an explicit `index_channel` | PR #128, in review | in progress |
 | R6 | `LICENSE`, `README.md`, `.github/dependabot.yml` | all three present | satisfied |
 | R7 | the nine-file docs bundle | all nine present | satisfied |
@@ -241,7 +241,48 @@ outside this repository can observe step 1.
 
 Gated on the three-part negative control above. No tag is cut as part of it.
 
-### Step 2 — R3 metadata, name still unchanged
+### Step 2 — R3 metadata, name still unchanged — **DONE 2026-11-25**
+
+Merged after 0.5.0, so it ships in the next release rather than retroactively. `sources` was
+already correct; this added `home` and the `krateo.io/source-repo` annotation, both naming
+**today's** repository name, R1 deviation included — a field naming a repository that does not
+exist yet is worse than one naming the repository that does. All three strings move together in
+one pull request if R1 ever lands.
+
+`appVersion` was settled in the same change, as planned below: it is now `CHART_VERSION` too.
+Two things were verified first, and the second is the interesting one.
+
+**Nothing consumes it.** `.Chart.AppVersion` appears nowhere in `chart/`. Four docs
+(`README.md`, `docs/usage.md`, `docs/getting-started.md`, `docs/troubleshooting.md`) say "the
+chart derives `rdc.image.tag` from its own `appVersion`" and **none of them means this chart** —
+that is the oasgen-provider chart. Had it meant this one, stamping `appVersion` from the tag
+would have changed which controller image gets deployed.
+
+**`scripts/validate.py`'s substitution was anchored, and its comment said it was not.** It read
+
+```python
+re.sub(r"^version:\s*CHART_VERSION\s*$", "version: 0.0.0", txt, flags=re.M)
+```
+
+with a comment claiming it did "exactly what the release does". The release does
+`sed "s/CHART_VERSION/${CHART_VERSION}/g"` — globally. Measured on this chart:
+
+```
+OLD anchored   version='0.0.0'  appVersion='CHART_VERSION'   helm lint: PASSED (rc=0)
+NEW global     version='0.0.0'  appVersion='0.0.0'           helm lint: PASSED (rc=0)
+```
+
+**helm lint passes on the literal placeholder**, because `version` must be SemVer and
+`appVersion` is a free string. So the anchored form would have validated a chart no release
+could ever produce, silently. This is R4's named hazard, which predicted it exactly: *"a
+substitution anchored to `version:` silently leaves `appVersion` as the literal placeholder,
+and helm accepts that without a word."* Fixed to a global replace in the same change.
+
+Making `appVersion` a placeholder also activates a release gate that was dormant: release-oci
+only verifies the packaged `appVersion` against the release version when the field is authored
+as a placeholder. With a literal it never checked.
+
+The original plan:
 
 Add to `chart/Chart.yaml`:
 
