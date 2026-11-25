@@ -92,7 +92,7 @@ Register the `CompositionDefinition`, then apply one instance to fan out into a
 
 ```sh
 # register the Composition (generates its CRD)
-kubectl apply -f compositions/compositiondefinition.yaml
+kubectl apply -f chart/compositiondefinition.yaml
 ```
 
 The chart values that drive the environment are documented in

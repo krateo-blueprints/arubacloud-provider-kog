@@ -38,7 +38,11 @@ from gen_samples_and_coverage import FILES, auth_block, crd_version, load_rds  #
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OAS = os.path.join(ROOT, "openapi")
-CHART = os.path.join(ROOT, "compositions", "aruba-network-environment")
+# REPOSITORY.md R2: the shipped chart is at `chart/`. This constant is why the move is
+# not a `git mv`: it is the DESTINATION of generated output, so a moved tree with this
+# left alone is silently rewritten back to the old path at the next generator run.
+# A grep for `compositions/` does not find this line -- os.path.join hides the separator.
+CHART = os.path.join(ROOT, "chart")
 OUT = os.path.join(CHART, "templates", "_generated.tpl")
 
 # The kinds this composition fans out into. Order is the order they are created in.
@@ -125,7 +129,7 @@ def render_auth(block):
 
 
 def main():
-    # --chart/--kinds exist so a chart OUTSIDE compositions/ can be generated from the
+    # --chart/--kinds exist so a chart OUTSIDE chart/ can be generated from the
     # same OAS-derived facts instead of hand-copying this generated file. tests/ uses
     # it for probe charts that must never ship. Defaults are the shipped chart, so CI's
     # `--check` is unaffected.

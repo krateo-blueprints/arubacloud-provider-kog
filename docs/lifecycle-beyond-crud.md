@@ -162,11 +162,11 @@ For "give me a whole environment", use the **composition concept**: a
 `CompositionDefinition` registers a Helm chart whose templates render the
 single-purpose Aruba CRs together, from one set of inputs.
 
-- Chart: [`compositions/aruba-network-environment/`](../compositions/aruba-network-environment/)
+- Chart: [`chart/`](../chart/)
   renders a `Vpc`, `Subnet`, `SecurityGroup` and `CloudServer` plus their
   `*Configuration` resources, all parameterised by shared values
   (`projectId`, `location`, `name`, CIDRs, flavor…).
-- Registration: [`compositions/compositiondefinition.yaml`](../compositions/compositiondefinition.yaml)
+- Registration: [`chart/compositiondefinition.yaml`](../chart/compositiondefinition.yaml)
   (`core.krateo.io/v1alpha1`) points at the packaged OCI chart, the same shape
   oasgen-provider's own chart uses.
 

@@ -76,7 +76,7 @@ source.
 `compute/CloudServer`'s multi-call, action-driven lifecycle
 (create/update/delete) was solved without a proxy by delegating to idempotent
 Snowplow RESTActions (`restactions/compute/`) through the fork's `*ApiRef`, with a
-whole-environment Composition (`compositions/`) for coordinated provisioning. See
+whole-environment Composition (`chart/`) for coordinated provisioning. See
 [Lifecycle beyond CRUD](lifecycle-beyond-crud.md).
 
 ## Fork pairing pinned to oasgen 0.18.0 / RDC 0.18.0 / chart 0.9.19

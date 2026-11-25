@@ -129,6 +129,16 @@ def main():
         if kind:
             by_provider.setdefault(prov, []).append(kind)
 
+    # The glob above DISCOVERS what to assert, so an empty result is a green run that
+    # asserted nothing. Measured: 11 provider directories, 36 kinds. If that glob ever
+    # returns nothing -- the tree renamed, this script run from the wrong directory --
+    # every loop below iterates zero times, `fail` stays 0 and this returns 0.
+    if not by_provider:
+        print("NOTHING TO ASSERT: no RestDefinition under restdefinitions/ declared a "
+              "spec.resource.kind.\nA clean result here would mean only that nothing "
+              "was looked at.")
+        return 1
+
     # ONE wait for the whole set, not one per CRD.
     #
     # Gate on Established rather than on the RestDefinition's Ready: nova measured
@@ -162,7 +172,20 @@ def main():
     for prov, kinds in sorted(by_provider.items()):
         fn = CONFIGMAP_PROVIDERS.get(prov)
         if not fn:
-            print(f"  SKIP {prov}: no document in CONFIGMAP_PROVIDERS")
+            # THIS WAS A SILENT `continue` TOO, four lines above the comment below that
+            # exists because the `if not want` case was a silent `continue`. The same
+            # defect, in the same function, one branch earlier -- fixed in the branch
+            # that had been thought about and left in the branch that had not.
+            #
+            # A provider directory with no entry in CONFIGMAP_PROVIDERS had every one of
+            # its kinds skipped, `fail` untouched, and the script exited 0. Measured
+            # today: 11 provider directories, 11 of them mapped, 0 skipped, 36 kinds
+            # asserted. So making this loud costs nothing now and is the whole point --
+            # it costs nothing precisely until someone adds a provider directory and
+            # forgets the mapping, which is the moment this must speak.
+            print(f"  FAIL {prov}: no document in CONFIGMAP_PROVIDERS, so "
+                  f"{len(kinds)} Configuration CRD(s) go unasserted")
+            fail += len(kinds)
             continue
         doc = json.load(open(os.path.join(ROOT, "openapi", fn)))
         want, why = declared_method(doc)
@@ -220,6 +243,13 @@ def main():
             print(f"  OK   {crd:52s} methods={got} fields={gotf}")
 
     print(f"\n{checked} Configuration CRD(s) asserted, {fail} failure(s)")
+    if checked == 0:
+        # The backstop, and not redundant with the two guards above: those cover an
+        # empty tree and an unmapped provider. This covers every other way the count
+        # can reach zero while `fail` stays zero -- which is the only combination that
+        # produces a green run with no assertion behind it.
+        print("NOTHING WAS ASSERTED. A clean result here would mean nothing.")
+        return 1
     return 1 if fail else 0
 
 

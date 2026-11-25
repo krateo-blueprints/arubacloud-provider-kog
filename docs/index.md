@@ -50,7 +50,7 @@ openapi/           Aruba specs, vendored byte-for-byte unmodified (+ CHECKSUMS.t
 configmaps/        per-provider ConfigMaps embedding those specs (oasPath source)
 restdefinitions/   one RestDefinition per resource (no proxies)
 restactions/       Snowplow RESTActions for CloudServer's delegated lifecycle
-compositions/      Krateo CompositionDefinition + Helm chart (whole-environment provisioning)
+chart/      Krateo CompositionDefinition + Helm chart (whole-environment provisioning)
 samples/           <Kind>Configuration + CR skeleton per resource + auth Secret
 eso/               External Secrets store + ExternalSecret that mint the Aruba token
 scripts/           reproducible generators + validator

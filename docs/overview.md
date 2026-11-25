@@ -80,7 +80,7 @@ flapping. See [Async readiness](async-readiness.md).
 
 ## Whole-environment provisioning: the Composition
 
-The `compositions/` directory pairs a Krateo `CompositionDefinition`
+The `chart/` directory pairs a Krateo `CompositionDefinition`
 (`core.krateo.io/v1alpha1`) with a Helm chart, `aruba-network-environment`.
 Registering the CompositionDefinition generates a CRD; applying one instance of it
 fans a single high-level input set (project, location, CIDRs, flavor, token

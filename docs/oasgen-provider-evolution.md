@@ -515,7 +515,7 @@ This is where genuine, non-cosmetic evolution is required.
 > repository** — see [`lifecycle-beyond-crud.md`](lifecycle-beyond-crud.md).
 > `compute/CloudServer` delegates create/update/delete to Snowplow RESTActions via
 > `*ApiRef` (`restactions/compute/`), and a Krateo Composition
-> (`compositions/`) provisions a whole environment. The items below therefore
+> (`chart/`) provisions a whole environment. The items below therefore
 > describe the *gap* and, where relevant, whether it is closed by delegation
 > today or still wants first-class support.
 
@@ -2153,7 +2153,7 @@ unreadableChildrenCount: 0
 
 **What this does NOT establish**, in core-provider's own framing, which belongs beside the
 result: no composition this repo ships renders `LoadBalancer` or `AiKey` — verified, the one
-chart under `compositions/` renders `Vpc`, `Subnet` and `SecurityGroup` — so the user-visible
+chart under `chart/` renders `Vpc`, `Subnet` and `SecurityGroup` — so the user-visible
 impact of this path today is **nil**. What the run establishes is the contract across the
 rest-dynamic-controller → cdc boundary, not fleet coverage. The probe composition lives under
 `tests/` and is never published, because shipping a child that can never be created would be a
