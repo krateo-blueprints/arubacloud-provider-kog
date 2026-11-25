@@ -236,7 +236,36 @@ jobs:
       - name: Every RestDefinition reaches Ready
         run: |
           set -uo pipefail
-          expected=$(find restdefinitions -name '*.yaml' | wc -l | tr -d ' ')
+          # THE SAME SELF-DISARMING SHAPE AS THE SAMPLES AND CHART LOOPS BELOW, and the
+          # third instance in this file. The old line was:
+          #
+          #     expected=$(find restdefinitions -name '*.yaml' | wc -l | tr -d ' ')
+          #
+          # With `restdefinitions/` missing or empty, `expected` is 0. `ready` is also 0,
+          # because `grep -c '^True$'` over no output is 0 and the `|| true` swallows its
+          # exit 1. So `[ "0" = "0" ]` matches on the FIRST pass and the loop breaks
+          # immediately. Measured, with no directory and no cluster:
+          # `iterations=1 exit=0` -- the step passes having waited for nothing, after
+          # printing "expecting 0 RestDefinitions to become Ready" and "ready 0/0". The
+          # zero is on screen, which is better than hiding it, and it is still green.
+          #
+          # Counting FILES was also a proxy for the wrong thing. The comparison is against
+          # RestDefinition objects in the cluster, so a single file holding two
+          # definitions would make `expected` one too low, `ready` would reach it while a
+          # definition was still rolling out, and the loop would break EARLY -- green,
+          # with an unready controller. Today 36 files hold exactly 36 documents (measured),
+          # so the proxy is currently exact; it is the kind of exactness that stops being
+          # true without anyone editing this line. Count the declarations instead.
+          [ -d restdefinitions ] || {
+            echo "::error::restdefinitions/ is not a directory. This step exists to wait"
+            echo "::error::for every RestDefinition to become Ready; with no directory it"
+            echo "::error::would wait for none and pass. If the tree moved, update this step."
+            exit 1; }
+          expected="$(grep -rhoE '^kind: RestDefinition$' restdefinitions --include='*.yaml' | wc -l | tr -d ' ')"
+          [ "${expected}" -gt 0 ] || {
+            echo "::error::found 0 RestDefinition declarations under restdefinitions/."
+            echo "::error::A green result here would mean only that nothing was waited for."
+            exit 1; }
           echo "expecting ${expected} RestDefinitions to become Ready"
 
           # Poll rather than `kubectl wait`: each RestDefinition generates a CRD and
