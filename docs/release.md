@@ -1,6 +1,6 @@
 ---
 type: Runbook
-title: krateo-arubacloud-provider-kog — release
+title: arubacloud-provider-kog — release
 description: How the aruba-network-environment Composition chart is packaged and published as an OCI artifact, how the CompositionDefinition version tracks it, and how the generated manifests are refreshed from updated Aruba specs.
 resource: oci://ghcr.io/krateo-blueprints/charts/aruba-network-environment
 tags: [release, oci, ghcr, chart, regeneration]

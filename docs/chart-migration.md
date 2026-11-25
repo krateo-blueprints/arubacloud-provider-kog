@@ -1,6 +1,6 @@
 ---
 type: Runbook
-title: krateo-arubacloud-provider-kog — chart migration to the repository standard
+title: arubacloud-provider-kog — chart migration to the repository standard
 description: How the shipped Composition chart moves to chart/ and is renamed after the repository (REPOSITORY.md R1-R3), what is a code change and what is a per-cluster change planned with the installer's owner, and the two CI gates that pass silently if the move is done wrong.
 resource: oci://ghcr.io/krateo-blueprints/charts/aruba-network-environment
 tags: [release, chart, standard, migration, installer]
@@ -29,11 +29,11 @@ SHA's.
 
 | Rule | What it requires | Here | |
 |---|---|---|---|
-| R1 | `<vendor>-provider-kog`, and **no `krateo-` prefix** | `krateo-arubacloud-provider-kog` | **deviates** |
+| R1 | `<vendor>-provider-kog`, and **no `krateo-` prefix** | `arubacloud-provider-kog` | **satisfied, 2026-11-25** |
 | R2 | one chart, at `chart/`; a config chart at `config-chart/`; no other chart | the chart is at `chart/` | **satisfied, 2026-11-25** |
 | R2 | a never-shipped chart lives under a test/example directory name | `tests/compositions/no-create-rollup/` and `examples/network-environment/` | satisfied |
 | R3 | a `chart/` that carries a `compositiondefinition.yaml` is named after what it provisions, and carries `krateo.io/source-repo` | named `aruba-network-environment`, and the annotation is present | **satisfied, 2026-11-25** |
-| R3 | `home` **and** `sources` name the repository | both name `krateo-blueprints/krateo-arubacloud-provider-kog` | **satisfied, 2026-11-25** |
+| R3 | `home` **and** `sources` name the repository | both name `krateo-blueprints/arubacloud-provider-kog` | **satisfied, 2026-11-25** |
 | R4 | a provider chart's `version` and `appVersion` are both `CHART_VERSION` | both are `CHART_VERSION` | **satisfied, 2026-11-25** — see [appVersion](#appversion) |
 | R5 | the release is the shared `release-oci` with an explicit `index_channel` | PR #128, in review | in progress |
 | R6 | `LICENSE`, `README.md`, `.github/dependabot.yml` | all three present | satisfied |
@@ -302,18 +302,48 @@ rather than anticipating it.
 Settle [appVersion](#appversion) in the same change. Still no published-name change,
 still a pull request.
 
-### Step 3 — R1: rename the repository. No longer a per-cluster change.
+### Step 3 — R1: rename the repository. No longer a per-cluster change. — **DONE 2026-11-25**
 
 **This was the expensive step. The R3 amendment removed its cost**, because the chart's
 name no longer derives from the repository's: `aruba-network-environment` stays, so the
 published OCI name stays, so nothing installed anywhere is renamed or retired.
 
-R1 still applies — `krateo-arubacloud-provider-kog` carries the `krateo-` prefix R1
-forbids, and should be `arubacloud-provider-kog`. What that now requires, in one pull
-request merged immediately after the GitHub rename with **no tag between the two**:
+**Done.** `krateo-arubacloud-provider-kog` → `arubacloud-provider-kog`, the GitHub rename
+followed immediately by one pull request, with **no tag between the two**. What it required,
+and all of which was checked rather than assumed:
 
 - `home`, `sources`, and the `krateo.io/source-repo` annotation from step 2
-- the repository URL wherever docs and examples name it
+- the repository URL wherever docs and examples name it — 15 occurrences across 12 files
+
+**What was checked before renaming, because a redirect does not cover everything.**
+
+`publish-chart`'s **ownership guard** is rename-safe, and deliberately so. It resolves the
+index entry's recorded owner through `canon()`, which calls `gh api repos/<recorded-name>`
+and takes `.full_name` — and a renamed repository still answers at its old name with its
+**new** full name. Its own comment says why: *"a repository renamed on GitHub still answers
+at its old name with its new full_name, so its own next version is not refused as another
+repository's. A lookup that fails keeps the recorded name, so an owner that cannot be
+resolved still refuses everyone else (fail closed)."* So the 0.5.0 index entry, which records
+the old repository in `sources` and carries no `krateo.io/source-repo` annotation yet,
+canonicalises to the new name and matches. **This was the one thing that could have made the
+next release unpublishable, and it does not.**
+
+No workflow hardcodes the repository name — they all read `github.repository`.
+`scripts/validate.py` has no gate tying `sources` or `home` to the live repository name, so
+the pull request passed CI on either side of the rename.
+
+**Two sets of references were deliberately left naming the old repository:**
+
+- `tests/ga/derived/payloads.yaml` — 18 **absolute local filesystem paths** recorded by the
+  agent run that produced it, including the pre-move `compositions/` chart path. They are a
+  record of where those agents looked. Rewriting them would falsify it.
+- The `Add to chart/Chart.yaml:` snippet under step 2 above — it records what step 2 planned,
+  and the sentence immediately after it reads *"The annotation names the repository as it is
+  TODAY, not as R1 will rename it."* Rewriting the snippet would make that sentence
+  incoherent about its own history.
+
+Versions already published (0.1.0 → 0.5.0) keep the old repository in their recorded
+`sources` and are **not** republished — [PUBLISHING.md rule 6](PUBLISHING.md).
 
 And what it no longer requires, all of it deleted by the amendment:
 

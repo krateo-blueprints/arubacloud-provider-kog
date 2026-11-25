@@ -26,7 +26,7 @@ cp tests/probes/fleet_parentdefault_probe_test.go \
    /tmp/ws-$TAG/go/oasgen-provider/internal/tools/render/
 
 cd /tmp/ws-$TAG/go/oasgen-provider
-ARUBA_REPO=/path/to/krateo-arubacloud-provider-kog \
+ARUBA_REPO=/path/to/arubacloud-provider-kog \
   go test -tags unit -count=1 -run TestFleetParentDefaultStamping ./internal/tools/render/ -v
 
 git -C "$CLONE" worktree remove --force /tmp/ws-$TAG

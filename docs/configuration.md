@@ -1,6 +1,6 @@
 ---
 type: Configuration
-title: krateo-arubacloud-provider-kog — configuration
+title: arubacloud-provider-kog — configuration
 description: The whole config surface — the Aruba token Secret, the per-kind <Kind>Configuration (authentication + per-verb query config), the RestDefinition fields that shape a CRD, and the Composition chart values.
 resource: oci://ghcr.io/krateo-blueprints/charts/aruba-network-environment
 tags: [configuration, secret, configuration-cr, restdefinition, chart-values]

@@ -39,24 +39,30 @@ appVersion: CHART_VERSION
 # HYPHENATED org -- krateoplatformops/.github 404s, the same install-source confusion
 # scripts/validate.py already screens for in the install docs.
 icon: https://raw.githubusercontent.com/krateo-platformops/.github/main/brand/logo.svg
-# R3: `home` and `sources` both name the publishing repository. `sources` was already
-# correct; this adds the `home` R3 also requires. Both name TODAY's repository name --
-# krateo-arubacloud-provider-kog, R1 deviation and all -- because R1 and R3 land together
-# and a field naming a repository that does not exist yet is worse than one naming the
-# repository that does.
-home: https://github.com/krateo-blueprints/krateo-arubacloud-provider-kog
+# R3: `home` and `sources` both name the publishing repository, and R1 is satisfied as of
+# 2026-11-25 -- the repository was renamed from krateo-arubacloud-provider-kog, and these
+# three strings moved in the pull request merged immediately after, with no tag between the
+# two (REPOSITORY.md, "Changing a published name").
+#
+# The chart's own `name` did NOT change and never had to: the R3 amendment decoupled it from
+# the repository's name, which is why this rename touched no cluster, retired no
+# CompositionDefinition and left the published OCI name alone. Versions already published
+# (0.1.0 through 0.5.0) keep the old repository in their recorded `sources` and are not
+# republished; publish-chart's ownership guard resolves a recorded owner through the GitHub
+# API, so a renamed repository still answers for its own chart name.
+home: https://github.com/krateo-blueprints/arubacloud-provider-kog
 # The annotation R3 asks a chart to carry so the published artifact says where its source
 # is without a reader having to resolve `sources`. Same value, deliberately: if the
 # repository is renamed, these three strings move in ONE pull request, merged right after
 # the GitHub rename with no release tagged in between (REPOSITORY.md, "Changing a published
 # name"). A GitHub redirect does NOT satisfy publish-chart, which compares the string.
 annotations:
-  krateo.io/source-repo: https://github.com/krateo-blueprints/krateo-arubacloud-provider-kog
+  krateo.io/source-repo: https://github.com/krateo-blueprints/arubacloud-provider-kog
 # The publisher REFUSES a chart whose `sources` does not list its publishing
 # repository -- that is how it enforces one owner per chart name, so a second repo
 # cannot quietly take over `aruba-network-environment`.
 sources:
-  - https://github.com/krateo-blueprints/krateo-arubacloud-provider-kog
+  - https://github.com/krateo-blueprints/arubacloud-provider-kog
 keywords:
   # The Marketplace renders these as tags, so they must describe what the chart
   # PROVISIONS. `cloudserver` was here and is removed: the description above spends a

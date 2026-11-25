@@ -1,6 +1,6 @@
 ---
 type: Architecture
-title: krateo-arubacloud-provider-kog — overview
+title: arubacloud-provider-kog — overview
 description: How the blueprint works — RestDefinition to generated CRD + controller, the nested-metadata identifier pattern that eliminates proxies, *ApiRef delegation for multi-call lifecycles, and the whole-environment Composition.
 resource: oci://ghcr.io/krateo-blueprints/charts/aruba-network-environment
 tags: [architecture, oasgen-provider, restdefinition, metadata-pattern, apiref]
