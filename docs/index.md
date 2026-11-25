@@ -41,6 +41,7 @@ official OpenAPI specifications.
 | [Live-cluster test](live-cluster-test.md) | What a real cluster proved — and the four defects static validation could not catch |
 | [Adversarial review](adversarial-review.md) | Every load-bearing claim attacked against the fork's executor source — confirmed breaks (fixed) and acquittals |
 | [Troubleshooting](troubleshooting.md) | Common failures and how to diagnose them |
+| [Chart migration](chart-migration.md) | How the shipped chart moves to `chart/` and is renamed under the repository standard — and which step is not a pull request |
 
 ## Repository layout
 
