@@ -37,8 +37,10 @@ helm install oasgen-provider oci://ghcr.io/krateo-platformops/charts/oasgen-prov
 > ([oasgen#278](https://github.com/krateo-platformops/oasgen-provider/issues/278)),
 > and the unhyphenated `krateoplatformops` org still resolves but is abandoned with
 > a disjoint tag range. The chart derives `rdc.image.tag` from its own `appVersion`,
-> so on 0.84.0 the two images can no longer drift apart — a chart version *is* the
-> pair it ships. On the pre-monorepo charts they could, and chart 0.9.18 shipped
+> so on 0.84.0 the two images do not drift apart by default — a chart version *is* the
+> pair it ships. **That is a default, not a lock**: setting `rdc.image.tag` explicitly
+> still overrides it, so leave it unset. The default exists because the tag was once
+> hand-maintained and chart 0.20.0 shipped a tag that was never published. On the pre-monorepo charts they could, and chart 0.9.18 shipped
 > oasgen 0.18.0 against RDC 0.16.1, on which these manifests are accepted and then
 > fail **silently** (`handleParam` ignored; delegated deletes receive no spec).
 

@@ -115,8 +115,11 @@ kubectl get deploy -n krateo-system -o jsonpath='{range .items[*]}{.metadata.nam
 ```
 
 If it is below 0.84.0, upgrade the provider chart to **0.84.0** — the RDC tag is
-derived from the chart's `appVersion`, so on the monorepo charts there is nothing
-to override and no way for the pair to drift
+derived from the chart's `appVersion`, so on the monorepo charts the pair does not drift
+**unless `rdc.image.tag` has been set explicitly, which overrides the derivation**. This
+paragraph previously said there was "nothing to override", which was wrong: if a
+controller is running an unexpected RDC tag, an explicit `rdc.image.tag` in the values is
+the first thing to check
 — see [prerequisites](../README.md#prerequisites). Otherwise, check the
 RESTAction's jq against the contract in
 [lifecycle-beyond-crud](lifecycle-beyond-crud.md#runtime-contracts-verified-against-rdc-source).

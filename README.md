@@ -82,8 +82,14 @@ valid source ([oasgen#278](https://github.com/krateo-platformops/oasgen-provider
 
 oasgen-provider is now a **monorepo**: rest-dynamic-controller and both Helm charts
 live in it, and the standalone `rest-dynamic-controller` repo is archived. The chart
-derives `rdc.image.tag` from its own `appVersion`, so the two images can no longer
-drift apart — a chart version *is* the pair it ships.
+derives `rdc.image.tag` from its own `appVersion`, so the two images no longer drift
+apart by default — a chart version *is* the pair it ships.
+
+**It is a default, not a lock.** Setting `rdc.image.tag` explicitly still overrides it, so
+leave it unset unless you have a specific reason. The default exists because the pin used
+to be hand-maintained and the manual step was missed once: oasgen-provider chart **0.20.0
+shipped tag 0.19.0, a version never published**, and every generated controller
+`ImagePullBackOff`'d. Confirmed against oasgen-provider at tag 0.93.0 and main.
 
 ```sh
 # CRDs first — they are a separate chart

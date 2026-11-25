@@ -58,7 +58,8 @@ This walks through installing the provider and managing your first resource (a
 
   > oasgen-provider is a **monorepo**: rest-dynamic-controller and both Helm charts
   > live in it, and the standalone controller repo is archived. The chart derives
-  > the RDC tag from its own `appVersion`, so the two images cannot drift apart.
+  > the RDC tag from its own `appVersion`, so the two images do not drift apart unless
+  > you set `rdc.image.tag` yourself. Leave it unset.
   >
   > A stock upstream oasgen-provider from before this lineage does **not** have the
   > features these RestDefinitions rely on (nested identifiers, `fieldMapping`,
