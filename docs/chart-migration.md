@@ -380,11 +380,38 @@ negative every time.
 
 ## appVersion
 
-The chart carries `version: CHART_VERSION` and `appVersion: "1.0.0"`. Only the
-placeholder is stamped, so `appVersion` is hand-maintained — and R4 records what that
-costs: a chart was found at `0.1.9` while its repository released `0.15.0`. This
-repository is at 0.4.0 with `appVersion: "1.0.0"`, which is the same drift, already
-happening.
+**Settled 2026-11-25: both fields are `CHART_VERSION`.** The reasoning below is kept
+because it is the argument, and because one step of carrying it out mattered more than the
+decision did.
+
+The chart used to carry `version: CHART_VERSION` and `appVersion: "1.0.0"`. Only the
+placeholder was stamped, so `appVersion` was hand-maintained — and R4 records what that
+costs: a chart was found at `0.1.9` while its repository released `0.15.0`. This repository
+published 0.2.0 through 0.5.0 each with `appVersion: "1.0.0"` beside them, which was the
+same drift, already happening.
+
+**What made the change non-trivial.** `scripts/validate.py` lints a copy of the chart with
+the placeholder substituted, under a comment claiming it did "exactly what the release
+does". It did not — it was `re.sub(r"^version:\s*CHART_VERSION\s*$", ...)`, anchored to
+`version:`, while the release does a global `sed`. Measured both ways:
+
+```
+OLD anchored   version='0.0.0'  appVersion='CHART_VERSION'   helm lint: PASSED (rc=0)
+NEW global     version='0.0.0'  appVersion='0.0.0'           helm lint: PASSED (rc=0)
+```
+
+**`helm lint` passes on a literal `appVersion: CHART_VERSION`** — `version` must be SemVer,
+`appVersion` is a free string. So the anchored form would have validated a chart no release
+could produce, silently, from the moment a second field became a placeholder. R4 names this
+hazard almost verbatim. Fixed to a global replace in the same change.
+
+**And one thing was checked before changing it, because the failure would have been
+severe.** Five documents here assert that the oasgen-provider chart derives `rdc.image.tag`
+from *its own* `appVersion`. If any of them had meant *this* chart, stamping `appVersion`
+from the tag would have changed which controller image gets deployed. None do:
+`.Chart.AppVersion` appears nowhere in `chart/`. oasgen-provider confirmed the derivation
+is real on their side, at tag 0.93.0 and main — and that it is a **default**, overridable
+by setting `rdc.image.tag`, which those five documents had been overstating as a lock.
 
 R4's rule is written for a provider chart (one with no CompositionDefinition), where
 both fields are `CHART_VERSION`. This chart has a CompositionDefinition, so R4 does not
@@ -393,8 +420,11 @@ the release and cannot drift; or give it a meaning and maintain it. Recommendati
 placeholder, because nothing here has a version independent of the repository's — the
 chart ships no image, and oasgen-provider spawns the controller.
 
-Either way it is a one-line change that belongs in step 2, where it is observable in a
-dry run before a tag.
+It landed in step 2 as predicted, and the dry run did show it: the release resolves
+`APP_VERSION` from the latest tag but only applies it where the field is authored as a
+placeholder, so a literal was never checked. Making it a placeholder **activates a release
+gate that had been dormant** — release-oci now verifies the packaged `appVersion` against
+the release version.
 
 ## What the installer's owner was asked, and why it no longer blocks
 

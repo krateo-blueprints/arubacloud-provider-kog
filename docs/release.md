@@ -205,8 +205,10 @@ two were the same number when this section was written and have not been since; 
 them distinct matters because the floor explains what cannot be lowered, while the pin is
 what the evidence was gathered on. It is no longer a fork:
 rest-dynamic-controller and both charts live in the oasgen-provider monorepo, and the
-chart derives the RDC image tag from its own `appVersion`, so the two cannot drift
-apart.
+chart derives the RDC image tag from its own `appVersion`, so the two do not drift apart
+**unless `rdc.image.tag` is set explicitly, which overrides the derivation**. It is a
+default, not a lock — confirmed against oasgen-provider at 0.93.0 and main, where
+`rdc.image.tag` ships empty and `.Chart.AppVersion` is passed as `defaultTag`.
 
 ### The chart-push pin must stay at or after the argv fix
 
