@@ -39,10 +39,7 @@
       and the flavor catalog returns only {name, cpu, ram}, so which flavors a
       given account may use is not discoverable before the create is attempted.
 */}}
-{{/* CONTROL -- REVERTED IN THE NEXT COMMIT. The historical 0.2.0 defect, reintroduced
-     deliberately to prove the render-against-the-CRDs gate still BITES at chart/ and
-     did not merely move. helm lint and helm template both accept this. */}}
-apiVersion: arubacloud.ogen.krateo.io/v1alpha1
+apiVersion: {{ include "aruba.gen.apiVersion.Vpc" . }}
 kind: Vpc
 metadata:
   name: {{ .Values.name }}-vpc
