@@ -32,7 +32,7 @@ SHA's.
 | R1 | `<vendor>-provider-kog`, and **no `krateo-` prefix** | `krateo-arubacloud-provider-kog` | **deviates** |
 | R2 | one chart, at `chart/`; a config chart at `config-chart/`; no other chart | the chart is at `compositions/aruba-network-environment/` | **deviates** |
 | R2 | a never-shipped chart lives under a test/example directory name | `tests/compositions/no-create-rollup/` and `examples/network-environment/` | satisfied |
-| R3 | the chart is named after the repository | chart name is `aruba-network-environment` | **deviates** |
+| R3 | a `chart/` that carries a `compositiondefinition.yaml` is named after what it provisions, and carries `krateo.io/source-repo` | named `aruba-network-environment`, which is what it provisions — but **no annotation** | **deviates on the annotation only** (see [the amendment](#the-amendment-that-removed-step-3)) |
 | R3 | `home` **and** `sources` name the repository | `sources` does; there is **no `home` key** | **deviates** |
 | R4 | a provider chart's `version` and `appVersion` are both `CHART_VERSION` | `version: CHART_VERSION`, `appVersion: "1.0.0"` hand-maintained | see [appVersion](#appversion) |
 | R5 | the release is the shared `release-oci` with an explicit `index_channel` | PR #128, in review | in progress |
@@ -54,9 +54,10 @@ the path stops matching:
 
 | Where | What it does | On a moved chart |
 |---|---|---|
-| `scripts/gen_composition.py:41` | `CHART = .../compositions/aruba-network-environment` — the destination of the generated `templates/_generated.tpl` | the next generator run **re-creates the old path**, and a hand-moved tree is reverted. This repository has been bitten by exactly this before; generated paths are not editable by hand |
-| `scripts/validate.py:1789` | `glob.glob("compositions/**/Chart.yaml")`, then `if not chart_dirs: return 0` | helm lint and helm template stop running **and the validator still exits 0** |
+| `scripts/gen_composition.py:41` | `CHART = .../compositions/aruba-network-environment` — the destination of the generated `templates/_generated.tpl` | the next generator run **re-creates the old path**, and a hand-moved tree is reverted. This repository has been bitten by exactly this before; generated paths are not editable by hand. Note it is `os.path.join(ROOT, "compositions", …)`, so **a grep for `compositions/` does not find this line** |
+| `scripts/validate.py:1789` | `glob.glob("compositions/**/Chart.yaml")`, then `if not chart_dirs: return 0` | helm lint and helm template stop running **and the validator still exits 0**, reporting `0 chart(s)` in a summary line |
 | `.github/workflows/validate.yaml:335` | `for chart in compositions/*/` guarded by `[ -f "${chart}Chart.yaml" ] || continue` | the glob matches nothing, so (no `nullglob`) the loop iterates **once** over the literal string `compositions/*/`, the guard `continue`s it, `fail` stays `0`, and the job is **green**. Measured, not inferred: `iterations=1 fail=0` |
+| `docs/llms.txt` | lists repository files by path; the shared `lint-docs` reusable checks each entry exists | **red**, on every moved entry. A third gate, and a loud one — it was not in the first draft of this plan |
 
 That third one is the gate that exists because a broken chart shipped twice: it applies
 the rendered chart server-side against the CRDs the same job generated, and its own
@@ -65,24 +66,43 @@ both accepted. Losing it quietly is the worst outcome of this migration, and it 
 reached by moving a directory and nothing else.
 
 **So the move is not trusted on a green build.** Green is the failure mode here, which
-means the control cannot be "did CI pass" — it has to be "did the gate speak". In this
-order:
+means the control cannot be "did CI pass" — it has to be "did the gate speak".
 
-1. **Move the chart, change nothing else, and expect silence rather than red.**
-   `validate_charts` returns `0` having found no chart; the CI loop iterates once and
-   `continue`s. Confirm by the **absence** of the per-chart `accepted by the generated
-   CRDs` line, because nothing else distinguishes this from a pass. (`gen_composition.py
-   --check` will fail loudly in the same run, its target file having moved — that is a
-   different gate, and its noise must not be read as the chart gates reporting.)
-2. **Update the three paths and re-run.** Both must be loud again: the CI job prints the
-   per-chart `accepted by the generated CRDs` line, and `gen_composition.py --check`
-   agrees with the tree at the new path, which is what proves the constant moved with
-   the files.
-3. **Prove the gate still bites at the new path.** Temporarily reintroduce one of the
-   defects its header records from published 0.2.0 — an `apiVersion` the generated CRDs
-   do not serve is the cheapest — and confirm the job **fails**. Revert it. Without this
-   step, steps 1 and 2 are consistent with a gate that moved and with a gate that is
-   merely quiet in a new place.
+### What the control actually measured
+
+This section first predicted that a bare move would go green-and-silent. **It does not,
+and the correction matters more than the prediction did**, because it changes which
+version of this move is dangerous. Measured on PR #130:
+
+| Commit | What was moved | Result |
+|---|---|---|
+| `29b5ee4` | the directory, and **nothing else** | **caught loudly, twice.** `static validation` red — `STALE: compositions/aruba-network-environment/templates/_generated.tpl differs from what gen_composition.py would write`. `lint-docs` red on three `docs/llms.txt` entries that no longer exist. And the chart gate **never ran at all**: the smoke job is `needs: validate` (`validate.yaml:181`), so a red generator gate stops it |
+| `59e1a98` | the directory, the generator constant and the docs — the two chart gates left pointing at `compositions/` | **a fully green build that checked no chart.** `static validation` **passed**, printing `Checked 36 RestDefinitions, 12 ConfigMaps, 0 chart(s).` `kind smoke test` **succeeded**, and its per-chart `accepted by the generated CRDs` string appears in the log *only as the echo statement's source, never as output*. `lint-docs` passed |
+
+So the hazard is not "move the directory". A bare move is caught. **The dangerous version
+is the careful-looking one**: fix everything CI complained about, stop there, and the two
+chart gates are disarmed while every check is green — including the server-side-apply
+gate that exists because a broken chart shipped twice. "I fixed what CI reported" is
+precisely the state in which this fails.
+
+### The control, as it should be run
+
+1. **Move the chart alone.** Expect red, from the generator and from `lint-docs`. This
+   proves those two follow the chart; it proves nothing about the chart gates, which do
+   not even run.
+2. **Satisfy the loud gates and stop.** Expect green — and read the log, not the verdict:
+   `0 chart(s)` and a missing per-chart line are the hazard, visible only there.
+3. **Fix the chart gates and re-run.** The count must be non-zero and the per-chart
+   `accepted by the generated CRDs` line must be **printed**.
+4. **Prove the gate still bites at the new path.** Reintroduce one of the defects its
+   header records from published 0.2.0 — an `apiVersion` the generated CRDs do not serve
+   is the cheapest — confirm the job **fails**, and revert. Without this, step 3 is
+   consistent with a gate that moved and with a gate that is merely quiet somewhere new.
+
+The repair is not new paths but the end of discovery: `chart/` and `config-chart/` are
+named explicitly, since R2 fixes that set, and an empty set is an **error** rather than a
+`return 0`. A glob answers "what is there"; what a gate needs to know is "is what must be
+there, there".
 
 ### The CompositionDefinition moves *inside* `chart/`, not to the repository root
 
@@ -105,7 +125,11 @@ must change in the same commit; a mismatch is refused before anything is pushed 
 than published wrong. This is a genuine safety property of the rename — it is the
 *cluster* side, below, that has no such guard.
 
-### A rename is visible to consumers in three more places
+### What a chart rename would have been visible in — kept as the cost that was avoided
+
+**None of this happens any more**, because the R3 amendment below means the chart keeps
+its name. It is recorded because it is what the amendment bought, and because it is the
+checklist for any future change that does rename a published chart.
 
 - **The published OCI name.** `aruba-network-environment` has 0.2.0, 0.3.0 and 0.4.0
   published at `oci://ghcr.io/krateo-blueprints/charts/aruba-network-environment`.
@@ -118,11 +142,41 @@ than published wrong. This is a genuine safety property of the rename — it is 
   apply. It pins the old OCI URL, and a user who applied it has a live CD under the old
   name regardless of what this repository does next.
 
-49 lines across 20 files name `aruba-network-environment` and change in a rename; 10 of
-those files are docs. Measured on `main` at `e806f44`; one of the 20 is
-`.github/workflows/release-tag.yaml`, which #128 deletes.
+49 lines across 20 files name `aruba-network-environment` and would have changed in a
+rename; 10 of those files are docs. Measured on `main` at `e806f44`; one of the 20 is
+`.github/workflows/release-tag.yaml`, which #128 deletes. Under the amendment, **none of
+the 49 changes** — the R1 rename touches only the lines that name the *repository*.
 
-## The decision that should be made before the rename, not during it
+## The amendment that removed step 3
+
+**This section asked for a decision, Diego made it, and the rule changed — so the
+expensive step is gone.** What follows is kept because the reasoning is what produced the
+amendment, and because anyone reading this plan later should see why the chart is not
+named after the repository.
+
+R3 is amended in `krateo-blueprints/charts#58`: a `chart/` that carries a
+`compositiondefinition.yaml` is named after **what it provisions**, and must carry a
+`krateo.io/source-repo` annotation naming its repository; `home` and `sources` are
+unchanged. The ownership guarantee R3 exists to provide never came from the name —
+`publish-chart` refuses a chart whose `sources` does not list its publishing repository,
+comparing a string — so naming by content costs nothing and traceability moves to the
+annotation.
+
+What that buys, concretely: **`aruba-network-environment` keeps its name, so the published
+OCI name never changes, so there is no published-name rename at all.** No per-cluster
+CompositionDefinition retirement, no CRD-and-custom-resource survival proof, nothing for
+the installer's owner to sequence. The whole of
+[Changing a published name](https://github.com/krateo-blueprints/charts/blob/main/REPOSITORY.md#changing-a-published-name)
+stops applying to this repository.
+
+The question acmp asked before taking it — whether a consumer's pin loses "find the
+source" — is answered in the issue from `krateo-platformops/installer` on `main`: a pin is
+chart name + version against an `ociRepo` base, **no GitHub repository appears in a pin at
+all**, and `pin-version-lines.yaml`'s `oasgen` group already pins three chart names from
+one source repository, `controller-render-service` among them. The case the amendment
+creates already ships.
+
+## The reasoning that produced it
 
 R3 names the chart after the repository. The chart this repository ships is a
 **Composition** that provisions Vpc + Subnet + SecurityGroup. The repository's actual
@@ -165,34 +219,60 @@ Gated on the three-part negative control above. No tag is cut as part of it.
 
 ### Step 2 — R3 metadata, name still unchanged
 
-Add `home: https://github.com/krateo-blueprints/krateo-arubacloud-provider-kog`.
-Settle [appVersion](#appversion). Still no published-name change, still a pull request.
+Add to `chart/Chart.yaml`:
 
-### Step 3 — R1 + R3: the rename, per cluster, with the installer's owner
+```yaml
+home: https://github.com/krateo-blueprints/krateo-arubacloud-provider-kog
+annotations:
+  krateo.io/source-repo: https://github.com/krateo-blueprints/krateo-arubacloud-provider-kog
+```
 
-R1 and R3 land together: R3 derives the chart's name, `home` and `sources` from the
-repository's name, so renaming either alone fails `publish-chart`, which compares the
-name as a **string** — a GitHub redirect does not satisfy it.
+**The annotation names the repository as it is TODAY, not as R1 will rename it.** A
+pre-emptive post-rename URL names a repository that does not exist, and the standard
+already handles the transition the other way: in a repository rename, *"every place that
+names the repository (`home`, `sources`, and the `krateo.io/source-repo` annotation where
+the chart carries one) changes in one pull request"*. So the annotation joins that set
+rather than anticipating it.
 
-In this repository, in one pull request merged immediately after the GitHub rename, with
-**no tag between the two**:
+Settle [appVersion](#appversion) in the same change. Still no published-name change,
+still a pull request.
 
-- repository `krateo-arubacloud-provider-kog` → `arubacloud-provider-kog`
-- chart `name`, `home`, `sources`, and the `krateo.io/source-repo` annotation where the
-  chart carries one
-- the CD's `metadata.name` and `spec.chart.url`
-- `examples/`, `docs/`, and the generator's and validator's constants
+### Step 3 — R1: rename the repository. No longer a per-cluster change.
 
-On every cluster, planned with the installer's owner **before** this repository is
-touched:
+**This was the expensive step. The R3 amendment removed its cost**, because the chart's
+name no longer derives from the repository's: `aruba-network-environment` stays, so the
+published OCI name stays, so nothing installed anywhere is renamed or retired.
 
-- the new name added and the old one retired in **one** installer change
-- the old values key kept until no live installation carries it
-- the installed custom resources **proven to survive** the move first
+R1 still applies — `krateo-arubacloud-provider-kog` carries the `krateo-` prefix R1
+forbids, and should be `arubacloud-provider-kog`. What that now requires, in one pull
+request merged immediately after the GitHub rename with **no tag between the two**:
+
+- `home`, `sources`, and the `krateo.io/source-repo` annotation from step 2
+- the repository URL wherever docs and examples name it
+
+And what it no longer requires, all of it deleted by the amendment:
+
+- ~~the chart's `name`~~ — unchanged
+- ~~the CompositionDefinition's `metadata.name` and `spec.chart.url`~~ — both name the
+  chart, not the repository
+- ~~the release asset's filename~~ — named for the chart
+- ~~per-cluster planning with the installer's owner~~ — no published name changes, so no
+  live CompositionDefinition is retired and no CRD or custom resource is at risk
+- ~~a survival proof before any cluster is touched~~ — nothing is removed to survive
+
+The one thing that still bites if done carelessly: `publish-chart` compares `sources` as
+a **string**, and a GitHub redirect does not satisfy it. So a tag cut between the GitHub
+rename and the merge of that pull request publishes nothing — hence "no tag between the
+two", which is the whole of the remaining risk.
+
+The survival bar that step 3 used to need is kept below, because it is the right bar for
+any future change that does remove a live CompositionDefinition — just not for this one.
+
+#### The survival bar, for whenever it is next needed
 
 A live CompositionDefinition's removal can take the generated CRDs and every custom
-resource with them. So "proven to survive" is a measurement on a cluster, taken before
-any cluster that matters is touched, and the bar is:
+resource with them. "Proven to survive" is a measurement on a cluster, taken before any
+cluster that matters is touched:
 
 - `metadata.uid` unchanged — a recreated object is not a surviving object
 - `metadata.generation` and `metadata.creationTimestamp` unchanged
@@ -221,14 +301,22 @@ chart ships no image, and oasgen-provider spawns the controller.
 Either way it is a one-line change that belongs in step 2, where it is observable in a
 dry run before a tag.
 
-## What the installer's owner is being asked
+## What the installer's owner was asked, and why it no longer blocks
 
-Not an approval of this document — two readings this repository cannot take:
+Two readings this repository could not take were put to the installer's owner, because
+step 3 as originally planned had a per-cluster blast radius this document had not costed:
 
 1. Does any Installer CR, `component-pins.yaml` entry or `componentValues` key name
-   `aruba-network-environment`, on any cluster? If it does, step 3 has a blast radius
-   this document has not costed.
-2. What does "the new name added and the old one retired in one installer change" look
-   like concretely — one commit, or a pin plus a values change that cannot be atomic?
-   If it cannot be atomic, step 3 needs a window, and the plan needs to say which half
-   lands first.
+   `aruba-network-environment`, on any cluster?
+2. Can "the new name added and the old one retired" be **one** installer change, or does
+   it need a window — and if so, which half lands first?
+
+**The R3 amendment made both moot for this migration**: no chart is renamed, so no pin
+changes, nothing is retired, and there is no window to sequence. Question 1 is still worth
+an answer for its own sake — knowing whether a pin names this chart is useful the next
+time anything about it changes — but nothing waits on it.
+
+The one thing worth carrying to the installer's owner instead is the gate finding above,
+because it is not specific to charts: any gate that **discovers** its targets by glob,
+find, label selector or directory listing reports success when it finds none, and a
+component that moves takes its gate's coverage with it silently.
