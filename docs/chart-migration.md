@@ -343,7 +343,7 @@ the pull request passed CI on either side of the rename.
   incoherent about its own history.
 
 Versions already published (0.1.0 → 0.5.0) keep the old repository in their recorded
-`sources` and are **not** republished — [PUBLISHING.md rule 6](PUBLISHING.md).
+`sources` and are **not** republished — [PUBLISHING.md rule 6](https://github.com/krateo-blueprints/charts/blob/main/PUBLISHING.md).
 
 And what it no longer requires, all of it deleted by the amendment:
 
