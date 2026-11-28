@@ -41,7 +41,10 @@
 # index that can never be read is now a FAILURE (it used to fall through as success), and
 # the image gate gained two advisories. WHAT THE DRY RUN DID NOT PROVE: `dry_run: true`
 # indexes nothing, so the index PUSH of 2.3.0 is unexercised, and the upstream tag message
-# says the same. Of the two advisories, the zero-document warning is reachable on a
+# says the same. [NO LONGER TRUE as of 2026-11-28 -- 0.6.0 exercised it; see WHAT IS PROVED
+# below. Kept because the sentence was accurate when written and the reasoning still applies
+# to any version whose publish path no release has run.] Of the two advisories, the
+# zero-document warning is reachable on a
 # successful render and stayed silent (a measured pass, as its companion "could not count"
 # warning also stayed silent); the `ci/*-values.yaml` remedy notice sits inside the
 # `if ! helm template` failure branch, so on a chart that renders its silence is control
