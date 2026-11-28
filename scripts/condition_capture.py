@@ -173,14 +173,39 @@ def discover_compositions(kube):
     return found
 
 
-def managed_refs(parent_obj):
-    refs = []
-    for m in (parent_obj.get("status") or {}).get("managed") or []:
-        grp = (m.get("apiVersion") or "").split("/")[0]
-        if m.get("resource") and m.get("name"):
-            res = m["resource"] + ("." + grp if "/" in (m.get("apiVersion") or "") else "")
-            refs.append((res, m.get("namespace", ""), m["name"]))
-    return refs
+def api_group(api_version):
+    """group of an apiVersion, '' for the core group; None when unparsable."""
+    if not api_version or api_version.count("/") > 1 or api_version.startswith("/") \
+            or api_version.endswith("/"):
+        return None
+    return api_version.split("/")[0] if "/" in api_version else ""
+
+
+def managed_state(parent_obj):
+    """status.managed ABSENT (inventory never recorded) vs present-but-EMPTY (an inventory
+    was recorded and holds nothing) vs present. They are different facts: core-provider
+    reports Ready=False/InventoryNotRecorded for the first, Ready=True/Available for the
+    second."""
+    m = (parent_obj.get("status") or {}).get("managed")
+    if m is None:
+        return "absent", []
+    return ("empty" if len(m) == 0 else "present"), m
+
+
+def managed_refs(entries):
+    """(resource, namespace, name) per status.managed entry, using the entry's own
+    `resource` (the plural, not the kind) and `namespace` as written. An entry missing
+    apiVersion/resource/name, or with an unparsable apiVersion, is healthy WITHOUT a GET
+    in core-provider's rollup, so it is returned as skipped, never fetched."""
+    refs, skipped = [], []
+    for m in entries:
+        grp = api_group(m.get("apiVersion"))
+        if not (m.get("apiVersion") and m.get("resource") and m.get("name")) or grp is None:
+            skipped.append(f"{m.get('resource')}/{m.get('namespace','')}/{m.get('name')}")
+            continue
+        res = m["resource"] + ("." + grp if grp else "")
+        refs.append((res, m.get("namespace", ""), m["name"]))
+    return refs, skipped
 
 
 def sample_once(kube, comps):
@@ -189,16 +214,28 @@ def sample_once(kube, comps):
     for res, ns, name in comps:
         nsarg = ["-n", ns] if ns else []
         pobj = kube.json("get", res, name, *nsarg)
+        state, entries = managed_state(pobj)
+        refs, skipped = managed_refs(entries)
         children = {}
-        for cres, cns, cname in managed_refs(pobj):
+        for cres, cns, cname in refs:
             cnsarg = ["-n", cns] if cns else []
             p = kube.run("get", cres, cname, *cnsarg, "-o", "json", check=False)
             key = f"{cres}/{cns}/{cname}"
-            if p.returncode != 0:
-                children[key] = {"error": p.stderr.strip()}
-            else:
+            if p.returncode == 0:
                 children[key] = summarise_child(json.loads(p.stdout))
+            elif "notfound" in p.stderr.lower().replace(" ", ""):
+                # NotFound counts as CONVERGING in the parent's rollup: keep it, flagged,
+                # as a non-True child rather than dropping it.
+                children[key] = {"absent": True, "name": cname,
+                                 "ready": {"status": "Absent", "reason": "NotFound"},
+                                 "synced": {"status": "Absent", "reason": "NotFound"}}
+            else:
+                children[key] = {"error": p.stderr.strip()}
         out.append({"composition": f"{res}/{ns}/{name}", "parent": summarise_parent(pobj),
+                    "managed_state": state, "managed_entries": len(entries),
+                    "managed_skipped_no_get": skipped,
+                    "managed_recorded_but_absent": sorted(
+                        k for k, v in children.items() if v.get("absent")),
                     "children": children})
     return {"t": now, "compositions": out}
 
@@ -353,7 +390,8 @@ def series(samples, comp, child):
     out = []
     for s in samples:
         for c in s["compositions"]:
-            if c["composition"] == comp and child in c["children"]:
+            if c["composition"] == comp and child in c["children"] \
+                    and "error" not in c["children"][child]:
                 out.append((s["t"], c["children"][child], c["parent"]))
     return out
 
@@ -447,6 +485,35 @@ def classify(flap, rows, passes, P):
     return {"D": D, "relation": rel, "passes_in_window": len(in_win), "verdict": verdict}
 
 
+def mismatches(samples, comp):
+    """status.managed is what the parent RECORDED when it last wrote the release, not
+    what exists now. State every disagreement with live existence."""
+    out, absent, skipped, counts = [], {}, set(), set()
+    n = 0
+    for s in samples:
+        for c in s["compositions"]:
+            if c["composition"] != comp:
+                continue
+            n += 1
+            for k, v in c["children"].items():
+                if v.get("absent"):
+                    absent[k] = absent.get(k, 0) + 1
+            skipped.update(c.get("managed_skipped_no_get") or [])
+            mc, me = c["parent"].get("managedChildrenCount"), c.get("managed_entries")
+            if mc is not None and me is not None and mc != me:
+                counts.add((mc, me))
+    for k, v in sorted(absent.items()):
+        out.append(f"recorded in status.managed but NotFound live in {v} of {n} "
+                   f"sample(s): {k} (deleted out of band, or not yet created)")
+    for k in sorted(skipped):
+        out.append(f"entry {k} is malformed; the parent counts it healthy without a GET, "
+                   "so it was not fetched")
+    for mc, me in sorted(counts):
+        out.append(f"status.managedChildrenCount={mc} but status.managed holds {me} "
+                   "entries")
+    return out
+
+
 def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
     samples = rec.get("samples") or []
     if not samples:
@@ -474,12 +541,23 @@ def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
         kids = sorted({k for s in samples for c in s["compositions"]
                        if c["composition"] == comp for k in c["children"]})
         if len(kids) < MIN_CHILDREN:
+            states = {c.get("managed_state", "unknown") for s in samples
+                      for c in s["compositions"] if c["composition"] == comp}
+            what = []
+            if "absent" in states:
+                what.append("status.managed is ABSENT: the inventory was never recorded "
+                            "(core-provider reports Ready=False/InventoryNotRecorded)")
+            if "empty" in states:
+                what.append("status.managed is present but EMPTY: the parent recorded an "
+                            "inventory with nothing in it (Ready=True/Available)")
+            if not what:
+                what.append("status.managed state was not recorded in this record")
             raise NothingFound(f"composition {comp} has 0 children in every sample "
-                               f"(expected >= {MIN_CHILDREN}); its status.managed is "
-                               "empty or absent")
+                               f"(expected >= {MIN_CHILDREN}); " + "; ".join(what))
         rvs = [c["parent"].get("resourceVersion") for s in samples
                for c in s["compositions"] if c["composition"] == comp]
-        entry = {"parent_writes_seen": len(set(rvs)) - 1, "children": {}}
+        entry = {"parent_writes_seen": len(set(rvs)) - 1, "children": {},
+                 "mismatches": mismatches(samples, comp)}
         for k in kids:
             rows = series(samples, comp, k)
             flaps = find_flaps(rows, "ready") + find_flaps(rows, "synced")
@@ -506,6 +584,8 @@ def render(rec, rep):
     o.append(f"== vendor GETs ==\n  {VENDOR_GETS.splitlines()[0]} (reason: see --help)")
     for comp, e in rep["compositions"].items():
         o.append(f"== {comp}   parent writes seen: {e['parent_writes_seen']} ==")
+        for m in e["mismatches"]:
+            o.append(f"  MISMATCH: {m}")
         for k, c in e["children"].items():
             o.append(f"  child {k}: {c['samples']} samples, "
                      f"{c['child_writes_seen']} writes seen, {len(c['flaps'])} flap(s)")
