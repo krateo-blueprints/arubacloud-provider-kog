@@ -525,7 +525,12 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--context", default=os.environ.get("KUBE_CONTEXT"))
     ap.add_argument("--duration", type=float, default=600)
-    ap.add_argument("--interval", type=float, default=5)
+    ap.add_argument("--interval", type=float, default=5,
+                    help="seconds between samples (default 5). A flap that starts and "
+                         "ends between two samples only gets an upper bound on D; if "
+                         "that bound is not below P the verdict is INDETERMINATE and "
+                         "the remedy is a smaller --interval. P comes ONLY from cdc log "
+                         "pass timestamps, with no fallback to the configured resync")
     ap.add_argument("--pass-gap", type=float, default=DEFAULT_PASS_GAP_S,
                     help="cdc log lines closer than this are one parent pass")
     ap.add_argument("--fixture", help="analyse this recorded JSON instead of a cluster")

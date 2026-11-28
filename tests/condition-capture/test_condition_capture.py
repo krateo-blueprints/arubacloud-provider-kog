@@ -103,5 +103,33 @@ class EmptyInputMustFail(unittest.TestCase):
         self.expect_fail(r, "no cdc log lines")
 
 
+FAKE_KUBECTL = """#!/bin/sh
+# Stands in for kubectl: the composition CRD exists, and listing it returns no items.
+case "$*" in
+  *"get crd"*) echo '{"items":[{"spec":{"group":"composition.krateo.io","names":{"plural":"comps"}}}]}' ;;
+  *"get comps"*) echo '{"items":[]}' ;;
+  *) echo "unexpected kubectl call: $*" >&2; exit 9 ;;
+esac
+"""
+
+
+class CrdExistsZeroInstances(unittest.TestCase):
+    def test_exit_3_naming_crd_and_zero_instances(self):
+        d = tempfile.mkdtemp()
+        k = os.path.join(d, "kubectl")
+        open(k, "w").write(FAKE_KUBECTL)
+        os.chmod(k, 0o755)
+        env = dict(os.environ, PATH=d + os.pathsep + os.environ["PATH"])
+        p = subprocess.run([sys.executable, "-I", SCRIPT, "--context", "x",
+                            "--duration", "1", "--interval", "1"],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("NOTHING FOUND", p.stderr)
+        self.assertIn("CRD(s) exist", p.stderr)
+        self.assertIn("comps.composition.krateo.io", p.stderr)
+        self.assertIn("0 instances", p.stderr)
+        self.assertEqual(p.stdout, "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
