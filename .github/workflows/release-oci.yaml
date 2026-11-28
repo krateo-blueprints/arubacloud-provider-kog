@@ -32,12 +32,47 @@
 # whose target dereferences to exactly aa90d48e -- verified here rather than taken on trust,
 # because a relabel is the change a reviewer has least reason to doubt. The SHA has not moved.
 #
-# 2.2.0 exists (705b79c) and is NOT what this should become: it adds pre-release support for
+# PIN MOVED 2.1.0 -> 2.3.0 (aa90d48 -> 5787de78), 2026-11-28. `2.3.0` is an annotated tag
+# (object 1cb00868) dereferencing to 5787de78, the commit dry-run 46119573795 exercised, so
+# the tag is not a rebase of what was tested. compare API: 2.3.0 is ahead of 2.1.0 by 12,
+# of 2.2.0 by 3 and of 2.0.0 by 18, behind by 0 in every case -- a strict descendant of
+# every earlier tag. It moves release-preflight, index-gate and publish-chart to charts
+# 1.13.2: the index gate narrates every archive it sees and refuses an empty dist, a served
+# index that can never be read is now a FAILURE (it used to fall through as success), and
+# the image gate gained two advisories. WHAT THE DRY RUN DID NOT PROVE: `dry_run: true`
+# indexes nothing, so the index PUSH of 2.3.0 is unexercised, and the upstream tag message
+# says the same. Of the two advisories, the zero-document warning is reachable on a
+# successful render and stayed silent (a measured pass, as its companion "could not count"
+# warning also stayed silent); the `ci/*-values.yaml` remedy notice sits inside the
+# `if ! helm template` failure branch, so on a chart that renders its silence is control
+# flow, not evidence.
+#
+# [SUPERSEDED by the move to 2.3.0 above -- kept as written, per this repo's retract-in-place
+# rule] 2.2.0 exists (705b79c) and is NOT what this should become: it adds pre-release support for
 # `index_channel: none`, and for any other channel 2.1.0 remains the version. What was
 # tested is then byte-for-byte what is released.
+# (Why it no longer holds: 2.3.0 is 3 commits ahead of 2.2.0 and CONTAINS its pre-release
+# support, so taking the newest tag no longer means taking 2.2.0 instead of the tested path.)
 #
-# DO NOT BUMP THIS PIN UNTIL `2.1.0` EXISTS ON aa90d48 -- AND THE DANGEROUS BUMP LOOKS LIKE
-# AN UPGRADE. Dependabot does not offer newer COMMITS of a SHA pin; it offers newer release
+# STANDING INSTRUCTION FOR A DEPENDABOT PR ON THIS PIN: CHECK THE ANCESTRY BEFORE CLOSING OR
+# TAKING IT. Neither a blanket close nor a blanket merge is right any more. Run
+#   gh api repos/krateo-platformops/.github/compare/<this pin's SHA>...<offered tag's SHA>
+# and read `status`, NOT `behind_by` alone -- and note the base is THIS PIN, written first.
+# Reversed, the dangerous bump prints the reassuring number: with pin aa90d48 and the 2.0.0
+# ancestor below, `compare/aa90d48...2.0.0` gives `status=behind behind_by=6` (refuse) while
+# `compare/2.0.0...aa90d48` gives `status=ahead behind_by=0` (looks safe). Same two commits,
+# opposite conclusion, and the natural argument order is the wrong one. So:
+#   status=ahead     + behind_by=0  -> a true descendant, a real upgrade, take it
+#   status=identical                -> a relabel of the same commit, a no-op, not an upgrade
+#   status=behind | diverged        -> it moves the pin backwards or sideways, CLOSE the PR
+# Since 2.3.0 the newest tag is a descendant of this pin, so for the first time the PR
+# offering the newest tag is correct.
+# The comment must still match the pinned-uses regex `^(\d+\.\d+\.\d+|main \d{4}-\d{2}-\d{2})$`.
+#
+# [HISTORY, NOT A CURRENT RULE -- true of 2.0.0 and of the pin at aa90d48, withdrawn as a
+# standing instruction by the paragraph above] DO NOT BUMP THIS PIN UNTIL `2.1.0` EXISTS ON
+# aa90d48 -- AND THE DANGEROUS BUMP LOOKS LIKE AN UPGRADE. Dependabot does not offer newer
+# COMMITS of a SHA pin; it offers newer release
 # TAGS. Measured 2026-11-23: upstream has 5 tags, the newest being `2.0.0`, and it points at
 # `7da11cb60cee`, which `compare` reports as `status=ahead ahead_by=6 behind_by=0` relative
 # to this pin -- i.e. 2.0.0 is an ANCESTOR of aa90d48.
@@ -49,7 +84,9 @@
 # throw away the exact property this release exists to prove, while reading as an upgrade in
 # the PR title.
 #
-# CLOSE such a PR. After 2.1.0 is tagged on aa90d48 the version ordering stops lying and
+# CLOSE such a PR. [That was right for 2.0.0, an ancestor. It stopped being a blanket rule
+# once 2.1.0 was tagged on aa90d48 and the newest tag became a descendant; see the standing
+# instruction above.] After 2.1.0 is tagged on aa90d48 the version ordering stops lying and
 # bumping is ordinary again. (The earlier version of this note said the risk was newer
 # commits that "do not touch the index path" -- wrong in the direction that matters, and
 # corrected by acmp.)
@@ -106,7 +143,7 @@ on:
 
 jobs:
   release:
-    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@aa90d48e1a101d5e9b3e547bca116b97c49513b5 # 2.1.0
+    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@5787de78bab935e422e75f6eabc47fa7cc073045 # 2.3.0
     # REQUIRED, AND ITS ABSENCE IS A STARTUP FAILURE, NOT A PUSH FAILURE.
     #
     # A called workflow's permissions are CAPPED AT ITS CALLER'S -- which the header of
