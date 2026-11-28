@@ -42,7 +42,7 @@ class Control(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         blocks = {}
         cur = None
-        for ln in p.stdout.splitlines():
+        for ln in p.stdout.split("== VERDICT SUMMARY")[0].splitlines():
             if ln.startswith("  child "):
                 cur = ln.split()[1].rstrip(":").rsplit("/", 1)[-1]
                 blocks[cur] = []
@@ -163,7 +163,70 @@ class EvidenceRules(unittest.TestCase):
         v = "\n".join(p.stdout.splitlines()[i:i + 4])
         self.assertIn("NOT ASSESSABLE", v)
         self.assertIn("WAS written", v)
+        self.assertRegex(p.stdout, r"VERDICT SUMMARY \(\d+ flap")
         self.assertNotIn("NOT PROPAGATED", v)
+
+
+class NameAttribution(unittest.TestCase):
+    """Exact token equality on the parsed name list; never a substring or regex search."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, os.path.join(HERE, "..", "..", "scripts"))
+        import condition_capture as cc
+        cls.cc = cc
+
+    def test_parse_names(self):
+        pn = self.cc.parse_names
+        self.assertEqual(pn("3 of 36 managed children are not ready: vpc-2, subnet-a, "
+                            "db-reasononly (+33 more)"),
+                         ["vpc-2", "subnet-a", "db-reasononly"])
+        self.assertEqual(pn("managed children not healthy: a, b"), ["a", "b"])
+        self.assertEqual(pn(""), [])
+        self.assertIsNone(pn("something else entirely: vpc"))
+
+    def test_prefixes_and_dots_do_not_match(self):
+        names = self.cc.parse_names("3 of 36 managed children are not ready: "
+                                    "ga-pf-folder-drifted, ga.x, cloudserver-prereqs")
+        for wrong in ("ga-pf-folder", "ga", "cloudserver", "x"):
+            self.assertNotIn(wrong, names)
+        for right in ("ga-pf-folder-drifted", "ga.x", "cloudserver-prereqs"):
+            self.assertIn(right, names)
+
+    def run_flap(self, msg_after, second_flapper=True):
+        """db-reasononly flaps while the message names something else."""
+        r = base()
+        for smp in r["samples"]:
+            t = round(smp["t"] - r["samples"][0]["t"])
+            rd = smp["compositions"][0]["parent"]["ready"]
+            if rd["status"] == "False" and "db-reasononly" in rd["message"]:
+                rd["message"] = msg_after
+            if second_flapper and 390 <= t < 430:
+                smp["compositions"][0]["children"][
+                    "vpcs.network.arubacloud.com/ns/sg-notprop"]["ready"] = {
+                    "status": "False", "reason": "Creating", "message": "",
+                    "lastTransitionTime": "2026-11-28T10:06:30Z"}
+        p = run(with_record(r))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        lines = p.stdout.splitlines()
+        i = [n for n, l in enumerate(lines) if l.startswith("  child") and
+             l.split()[1].endswith("db-reasononly:")][0]
+        return "\n".join(lines[i:i + 4])
+
+    def test_colliding_pair_is_not_propagated_by_attribution(self):
+        # the flapping child is db-reasononly; the message names db-reasononly-drifted
+        v = self.run_flap("2 of 2 managed children are not ready: net-other, "
+                          "db-reasononly-drifted")
+        print("\n--- colliding pair verdict ---\n" + v)
+        self.assertNotIn("PROPAGATED (", v)
+        self.assertNotIn("name gained", v)
+        self.assertIn("NOT ASSESSABLE", v)
+
+    def test_unknown_message_format_is_never_a_match(self):
+        v = self.run_flap("converging: db-reasononly is not ready")
+        self.assertNotIn("PROPAGATED (", v)
+        self.assertIn("attribution unavailable", v)
+        self.assertIn("NOT ASSESSABLE", v)
 
 
 class EmptyInputMustFail(unittest.TestCase):

@@ -440,8 +440,23 @@ def find_flaps(rows, which):
     return flaps
 
 
-def _names(msg, name):
-    return bool(msg) and re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", msg) is not None
+_MSG_PREFIX = re.compile(r"^(?:\d+ of \d+ managed children are not ready|"
+                         r"managed children not healthy): ")
+
+
+def parse_names(msg):
+    """The child names a parent Ready message lists, or None when the message is not one
+    of the two known formats (never guess). Formats, from core-provider:
+        "N of M managed children are not ready: a, b, c (+N more)"
+        "managed children not healthy: a, b, c (+N more)"
+    An empty/absent message is the healthy state and lists nothing ([])."""
+    if not msg:
+        return []
+    m = _MSG_PREFIX.match(msg)
+    if not m:
+        return None
+    rest = re.sub(r"\s*\(\+\d+ more\)\s*$", "", msg[m.end():])
+    return [t.strip() for t in rest.split(", ") if t.strip()]
 
 
 def _count(msg):
@@ -500,8 +515,12 @@ def parent_evidence(rows, flap, P, concurrent):
         if pr.get("message") == cr.get("message") and pr.get("reason") == cr.get("reason"):
             continue
         shown = f"before {_fmt(pr)} -> after {_fmt(cr)}"
-        if _names(pr.get("message"), name) != _names(cr.get("message"), name):
-            return (f"attributable (name {'gained' if _names(cr.get('message'), name) else 'lost'}"
+        pn, cn = parse_names(pr.get("message")), parse_names(cr.get("message"))
+        if pn is None or cn is None:
+            ctx.append(f"message not in a known format, attribution unavailable: {shown}")
+            continue
+        if (name in pn) != (name in cn):
+            return (f"attributable (name {'gained' if name in cn else 'lost'}"
                     f" at +{t-start:.0f}s): {shown}", was_down, ctx)
         pc, cc = _count(pr.get("message")), _count(cr.get("message"))
         if pc and cc and pc != cc:
@@ -687,6 +706,20 @@ def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
     return report
 
 
+VERDICTS = ("PROPAGATED", "NOT PROPAGATED", "NOT SAMPLED", "NOT ASSESSABLE",
+            "INDETERMINATE", "INVISIBLE TO PARENT")
+
+
+def verdict_counts(rep):
+    n = {v: 0 for v in VERDICTS}
+    for e in rep["compositions"].values():
+        for c in e["children"].values():
+            for f in c["flaps"]:
+                lab = max((v for v in VERDICTS if f["verdict"].startswith(v)), key=len)
+                n[lab] += 1
+    return n
+
+
 def render(rec, rep):
     o = []
     o.append("== provenance ==")
@@ -712,6 +745,14 @@ def render(rec, rep):
                          f"  Ready flaps overlapping window={f['concurrent_ready_flaps']}")
                 o.append(f"      relation: {f['relation']}")
                 o.append(f"      verdict:  {f['verdict']}")
+    n = verdict_counts(rep)
+    o.append("== VERDICT SUMMARY (%d flap(s)) ==" % sum(n.values()))
+    for v in VERDICTS:
+        o.append(f"  {v:20s} {n[v]}")
+    if n["NOT ASSESSABLE"] > sum(n.values()) / 2:
+        o.append("  NOTE: most flaps are NOT ASSESSABLE. The parent's status cannot "
+                 "attribute them at this scale (three-name cap, parent already not "
+                 "Ready); that is a finding about observability, not a failure of the run.")
     return "\n".join(o)
 
 
