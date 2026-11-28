@@ -53,6 +53,11 @@ import sys
 import time
 import urllib.request
 
+# The create-pending predicate lives in ONE place. `-I` drops the script directory from
+# sys.path, so add it explicitly rather than rely on how this was launched.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import create_pending_latch_check as latch  # noqa: E402
+
 # Declared expectations. Every count is compared to one of these, never to itself.
 MIN_COMPOSITIONS = 1
 MIN_CHILDREN = 1
@@ -134,6 +139,10 @@ def summarise_child(obj):
         "kind": obj.get("kind"), "name": md.get("name"),
         "ready": cond(obj, "Ready"), "synced": cond(obj, "Synced"),
         "resourceVersion": md.get("resourceVersion"),
+        # the four create markers, raw, so the SAME predicate the latch check uses can
+        # be applied offline
+        "annotations": {k: v for k, v in (md.get("annotations") or {}).items()
+                        if k == latch.PENDING or k in latch.CLEARERS},
     }
 
 
@@ -387,6 +396,79 @@ def passes_from(times, gap):
         if not passes or t - passes[-1] >= gap:
             passes.append(t)
     return passes
+
+
+# externalCreateRecoveryGracePeriod in unstructured-runtime (2 minutes, relayed from a
+# reading of the runtime, not re-verified here). While a create is incomplete AND its
+# pending stamp is younger than this, the runtime re-observes every 15s
+# (externalCreateRecoveryReobserveInterval, present since v1.27.1).
+CREATE_GRACE_S = 120.0
+REOBSERVE_S = 15.0
+
+
+def create_refused(rows):
+    """The child's create never landed: Ready was never True in any sample, the runtime
+    never recorded external-create-succeeded, and Synced=False/ReconcileError was seen
+    (the signature of a create answered 4xx). Returns the evidence string or None.
+    A child that is merely slow, with no ReconcileError, is NOT called refused."""
+    for _, ch, _ in rows:
+        if (ch.get("ready") or {}).get("status") == "True":
+            return None
+        if (ch.get("annotations") or {}).get("krateo.io/external-create-succeeded"):
+            return None
+    for t, ch, _ in rows:
+        sy = ch.get("synced") or {}
+        if sy.get("status") == "False" and sy.get("reason") == "ReconcileError":
+            return (f"Synced=False/ReconcileError {sy.get('message')!r}; Ready never "
+                    f"True in {len(rows)} sample(s); no external-create-succeeded")
+    return None
+
+
+def create_pending_report(rows):
+    """Per child: for how long was the create INCOMPLETE, by the predicate in
+    create_pending_latch_check.latch_state (pending strictly newer than the newest of
+    succeeded/failed/not-requested). Presence of the annotation alone is NOT 'pending':
+    the stamp stays on the object after the create completes, and what clears the state
+    is a newer clearer. Runs of consecutive incomplete samples are spans; a span's
+    duration is sample-resolution (+/- one --interval)."""
+    if not rows or any("annotations" not in r[1] for r in rows):
+        return {"recorded": False}
+    spans, cur, unorderable = [], None, []
+    incomplete = within = 0
+    for t, ch, _ in rows:
+        ann = ch["annotations"]
+        try:
+            state = latch.latch_state(ann)
+        except ValueError as e:
+            unorderable.append(str(e))
+            cur = None
+            continue
+        if state != latch.LATCHED:
+            cur = None
+            continue
+        incomplete += 1
+        in_grace = t - latch_epoch(ann[latch.PENDING]) <= CREATE_GRACE_S
+        within += in_grace
+        if cur is None:
+            cur = {"first": t, "last": t, "stamp": ann[latch.PENDING]}
+            spans.append(cur)
+        cur["last"] = t
+    return {"recorded": True, "samples": len(rows), "incomplete_samples": incomplete,
+            "within_grace_samples": within, "unorderable": unorderable,
+            "spans": [{"stamp": x["stamp"], "observed_s": x["last"] - x["first"]}
+                      for x in spans]}
+
+
+def latch_epoch(stamp):
+    return latch._ts(stamp, "pending")[0].timestamp()
+
+
+def _safe_state(ann):
+    try:
+        return latch.latch_state(ann)
+    except ValueError:
+        return None
+
 
 
 def series(samples, comp, child):
@@ -659,7 +741,8 @@ def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
     P = None
     if len(passes) >= MIN_PASSES_FOR_P:
         P = statistics.median(b - a for a, b in zip(passes, passes[1:]))
-    report = {"passes_observed": len(passes), "P": P, "compositions": {}, "children": 0}
+    report = {"passes_observed": len(passes), "P": P, "compositions": {}, "children": 0,
+              "excluded": []}
     for comp in comps:
         kids = sorted({k for s in samples for c in s["compositions"]
                        if c["composition"] == comp for k in c["children"]})
@@ -681,9 +764,15 @@ def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
                for c in s["compositions"] if c["composition"] == comp]
         entry = {"parent_writes_seen": len(set(rvs)) - 1, "children": {},
                  "mismatches": mismatches(samples, comp)}
-        per = {}
+        per, pending = {}, {}
         for k in kids:
             rows = series(samples, comp, k)
+            why = ("no readable sample of this child" if not rows
+                   else create_refused(rows))
+            if why:
+                report["excluded"].append((comp, k, why))
+                continue
+            pending[k] = create_pending_report(rows)
             per[k] = (rows, find_flaps(rows, "ready") + find_flaps(rows, "synced"))
         ready_flaps = [f for _, fl in per.values() for f in fl if f["which"] == "ready"]
         for k, (rows, flaps) in per.items():
@@ -698,12 +787,37 @@ def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
             entry["children"][k] = {
                 "samples": len(rows),
                 "child_writes_seen": len({r[1].get("resourceVersion") for r in rows}) - 1,
-                "flaps": out}
+                "create_pending": pending[k], "flaps": out}
             report["children"] += 1
         report["compositions"][comp] = entry
     if report["children"] < MIN_CHILDREN:
+        if report["excluded"]:
+            raise NothingFound(
+                f"every child failed the create precondition ({len(report['excluded'])} "
+                "excluded): no create succeeded, so the code path under test never ran "
+                "and nothing was measured. First: %s: %s" %
+                (report["excluded"][0][1], report["excluded"][0][2]))
         raise NothingFound("no children found")
     return report
+
+
+def render_pending(cp):
+    if not cp.get("recorded"):
+        return ("create-pending: NOT RECORDED (this record has no annotations); the "
+                "15s create-recovery re-observe cannot be ruled in or out")
+    if cp["unorderable"]:
+        return "create-pending: UNORDERABLE stamp(s): " + "; ".join(cp["unorderable"])
+    if not cp["spans"]:
+        return (f"create-pending: never incomplete in {cp['samples']} samples "
+                "(the 15s create-recovery re-observe was not active)")
+    sp = "; ".join(f"stamp {x['stamp']} observed incomplete for {x['observed_s']:.0f}s"
+                   for x in cp["spans"])
+    return (f"create-pending: INCOMPLETE in {cp['incomplete_samples']} of "
+            f"{cp['samples']} samples, {len(cp['spans'])} span(s) [{sp}] (sample "
+            f"resolution); {cp['within_grace_samples']} sample(s) within the "
+            f"{CREATE_GRACE_S:.0f}s grace, where the runtime re-observes every "
+            f"{REOBSERVE_S:.0f}s. Those 15s re-observes are NOT the mechanism of any "
+            "hint arm")
 
 
 VERDICTS = ("PROPAGATED", "NOT PROPAGATED", "NOT SAMPLED", "NOT ASSESSABLE",
@@ -737,6 +851,7 @@ def render(rec, rep):
         for k, c in e["children"].items():
             o.append(f"  child {k}: {c['samples']} samples, "
                      f"{c['child_writes_seen']} writes seen, {len(c['flaps'])} flap(s)")
+            o.append("    " + render_pending(c["create_pending"]))
             for f in c["flaps"]:
                 o.append(f"    flap on {f['which']}: reasons={sorted(map(str, f['reasons']))}"
                          f"  D={'<=' if f.get('bound') else ''}{f['D']:.1f}s  P={'%.1fs' % P if P is not None else 'n/a'}"
@@ -749,6 +864,11 @@ def render(rec, rep):
     o.append("== VERDICT SUMMARY (%d flap(s)) ==" % sum(n.values()))
     for v in VERDICTS:
         o.append(f"  {v:20s} {n[v]}")
+    o.append(f"  {'PRECONDITION FAILED':20s} {len(rep['excluded'])}  (children excluded "
+             "from every verdict above)")
+    for comp, k, why in rep["excluded"]:
+        o.append(f"    PRECONDITION FAILED: create refused, nothing was measured for this "
+                 f"child: {k} ({why})")
     if n["NOT ASSESSABLE"] > sum(n.values()) / 2:
         o.append("  NOTE: most flaps are NOT ASSESSABLE. The parent's status cannot "
                  "attribute them at this scale (three-name cap, parent already not "

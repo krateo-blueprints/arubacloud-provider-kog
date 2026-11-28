@@ -83,7 +83,7 @@ class ParentAlreadyDown(unittest.TestCase):
         lines = p.stdout.splitlines()
         i = [n for n, l in enumerate(lines) if l.startswith("  child") and
              l.split()[1].endswith("db-reasononly:")][0]
-        return "\n".join(lines[i:i + 4])
+        return "\n".join(lines[i:i + 5])
 
     def test_no_attributable_change_is_not_assessable(self):
         def flat(r):  # message never changes: nothing attributable, status never moves
@@ -117,7 +117,7 @@ class EvidenceRules(unittest.TestCase):
         lines = p.stdout.splitlines()
         i = [n for n, l in enumerate(lines) if l.startswith("  child") and
              l.split()[1].endswith("db-reasononly:")][0]
-        return "\n".join(lines[i:i + 4])
+        return "\n".join(lines[i:i + 5])
 
     @staticmethod
     def msgs(r, before, after):
@@ -160,7 +160,7 @@ class EvidenceRules(unittest.TestCase):
         p = run(with_record(r))
         sg = [l for l in p.stdout.splitlines() if "sg-notprop" in l][0]
         i = p.stdout.splitlines().index(sg)
-        v = "\n".join(p.stdout.splitlines()[i:i + 4])
+        v = "\n".join(p.stdout.splitlines()[i:i + 5])
         self.assertIn("NOT ASSESSABLE", v)
         self.assertIn("WAS written", v)
         self.assertRegex(p.stdout, r"VERDICT SUMMARY \(\d+ flap")
@@ -211,7 +211,7 @@ class NameAttribution(unittest.TestCase):
         lines = p.stdout.splitlines()
         i = [n for n, l in enumerate(lines) if l.startswith("  child") and
              l.split()[1].endswith("db-reasononly:")][0]
-        return "\n".join(lines[i:i + 4])
+        return "\n".join(lines[i:i + 5])
 
     def test_colliding_pair_is_not_propagated_by_attribution(self):
         # the flapping child is db-reasononly; the message names db-reasononly-drifted
@@ -227,6 +227,83 @@ class NameAttribution(unittest.TestCase):
         self.assertNotIn("PROPAGATED (", v)
         self.assertIn("attribution unavailable", v)
         self.assertIn("NOT ASSESSABLE", v)
+
+
+class CreatePrecondition(unittest.TestCase):
+    REFUSED = "vpcs.network.arubacloud.com/ns/net-refused"
+
+    def with_refused(self, only=False):
+        r = base()
+        for smp in r["samples"]:
+            ch = smp["compositions"][0]["children"]
+            bad = {"kind": "X", "name": "net-refused", "resourceVersion": "1",
+                   "ready": {"status": "False", "reason": "Creating", "message": "",
+                             "lastTransitionTime": "2026-11-28T10:00:07Z"},
+                   "synced": {"status": "False", "reason": "ReconcileError",
+                              "message": "400 refused", "lastTransitionTime":
+                              "2026-11-28T10:00:07Z"}}
+            if only:
+                ch.clear()
+            ch[self.REFUSED] = bad
+        return r
+
+    def test_refused_child_is_excluded_and_counted(self):
+        p = run(with_record(self.with_refused()))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("PRECONDITION FAILED  1", p.stdout)
+        self.assertIn("PRECONDITION FAILED: create refused, nothing was measured for "
+                      "this child: " + self.REFUSED, p.stdout)
+        self.assertNotIn("  child " + self.REFUSED, p.stdout, "no verdicts for it")
+        self.assertIn("db-reasononly", p.stdout)  # the others are still measured
+
+    def test_every_create_refused_exits_3(self):
+        p = run(with_record(self.with_refused(only=True)))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("NOTHING FOUND", p.stderr)
+        self.assertIn("every child failed the create precondition", p.stderr)
+        self.assertEqual(p.stdout, "")
+
+    def test_slow_child_without_reconcile_error_is_not_called_refused(self):
+        r = self.with_refused()
+        for smp in r["samples"]:
+            smp["compositions"][0]["children"][self.REFUSED]["synced"] = {
+                "status": "True", "reason": "ReconcileSuccess"}
+        p = run(with_record(r))
+        self.assertIn("PRECONDITION FAILED  0", p.stdout)
+
+    def test_pending_duration_reported(self):
+        r = base()
+        k = "vpcs.network.arubacloud.com/ns/vpc-prop"
+        t0 = r["samples"][0]["t"]
+        # pending stamped at t+100 and not cleared until t+160; clearer older
+        for smp in r["samples"]:
+            t = round(smp["t"] - t0)
+            ann = {"krateo.io/external-create-succeeded": "2026-11-28T10:00:00Z"}
+            if 100 <= t < 160:
+                ann["krateo.io/external-create-pending"] = "2026-11-28T10:01:40Z"
+            elif t >= 160:
+                ann["krateo.io/external-create-pending"] = "2026-11-28T10:01:40Z"
+                ann["krateo.io/external-create-succeeded"] = "2026-11-28T10:02:40Z"
+            for c in smp["compositions"][0]["children"].values():
+                c["annotations"] = dict(ann) if c["name"] == "vpc-prop" else {}
+        p = run(with_record(r))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        line = [l for l in p.stdout.splitlines() if "create-pending: INCOMPLETE" in l]
+        self.assertEqual(len(line), 1, p.stdout)
+        self.assertIn("INCOMPLETE in 6 of 51 samples, 1 span(s)", line[0])
+        self.assertIn("observed incomplete for 50s", line[0])
+        self.assertIn("6 sample(s) within the 120s grace", line[0])
+        self.assertIn("never incomplete in 51 samples", p.stdout)
+
+    def test_stamp_that_stays_after_completion_is_not_pending(self):
+        r = base()
+        t0 = r["samples"][0]["t"]
+        for smp in r["samples"]:
+            for c in smp["compositions"][0]["children"].values():
+                c["annotations"] = {"krateo.io/external-create-pending": "2026-11-28T10:00:00Z",
+                                    "krateo.io/external-create-succeeded": "2026-11-28T10:00:00Z"}
+        p = run(with_record(r))
+        self.assertNotIn("INCOMPLETE", p.stdout)
 
 
 class EmptyInputMustFail(unittest.TestCase):
