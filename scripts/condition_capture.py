@@ -53,6 +53,11 @@ import sys
 import time
 import urllib.request
 
+# The create-pending predicate lives in ONE place. `-I` drops the script directory from
+# sys.path, so add it explicitly rather than rely on how this was launched.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import create_pending_latch_check as latch  # noqa: E402
+
 # Declared expectations. Every count is compared to one of these, never to itself.
 MIN_COMPOSITIONS = 1
 MIN_CHILDREN = 1
@@ -134,6 +139,10 @@ def summarise_child(obj):
         "kind": obj.get("kind"), "name": md.get("name"),
         "ready": cond(obj, "Ready"), "synced": cond(obj, "Synced"),
         "resourceVersion": md.get("resourceVersion"),
+        # the four create markers, raw, so the SAME predicate the latch check uses can
+        # be applied offline
+        "annotations": {k: v for k, v in (md.get("annotations") or {}).items()
+                        if k == latch.PENDING or k in latch.CLEARERS},
     }
 
 
@@ -389,6 +398,108 @@ def passes_from(times, gap):
     return passes
 
 
+# externalCreateRecoveryGracePeriod in unstructured-runtime (2 minutes, relayed from a
+# reading of the runtime, not re-verified here). While a create is incomplete AND its
+# pending stamp is younger than this, the runtime re-observes every 15s
+# (externalCreateRecoveryReobserveInterval, present since v1.27.1).
+CREATE_GRACE_S = 120.0
+REOBSERVE_S = 15.0
+
+
+UNCONFIRMED_NOTE = (
+    "Every [create unconfirmed] verdict is a Synced-only flap (a Ready flap needs a prior "
+    "Ready=True, which would confirm the create) and the parent reads only Ready, so none "
+    "of them can bear on parent propagation.")
+
+CONFIRMED, REFUSED, NOT_ATTEMPTED, UNCONFIRMED = (
+    "confirmed", "refused", "not-attempted", "unconfirmed")
+
+
+def create_state(rows):
+    """Did this child's create actually run? (state, evidence)
+
+    CONFIRMED      Ready was True in some sample, or the runtime recorded
+                   external-create-succeeded.
+    otherwise, with neither ever seen:
+    REFUSED        Synced=False/ReconcileError was seen: the handler ran and the create
+                   was refused (a 4xx). EXCLUDED from verdicts.
+    NOT_ATTEMPTED  Synced reason ReconcileDeferred or ReconcilePaused: the runtime did NOT
+                   call the handler (deferred this pass / reconciliation paused), so no
+                   create was attempted. EXCLUDED from verdicts.
+    UNCONFIRMED    no error, no defer, no pause: perhaps just slow. MEASURED, but every
+                   verdict is flagged and it is counted, because it rests on a create
+                   nobody saw succeed.
+    ReconcileError wins over Deferred/Paused when both appear: the handler did run."""
+    for _, ch, _ in rows:
+        if (ch.get("ready") or {}).get("status") == "True":
+            return CONFIRMED, ""
+        if (ch.get("annotations") or {}).get("krateo.io/external-create-succeeded"):
+            return CONFIRMED, ""
+    tail = f"Ready never True in {len(rows)} sample(s); no external-create-succeeded"
+    err = defer = None
+    for _, ch, _ in rows:
+        sy = ch.get("synced") or {}
+        if sy.get("status") != "False":
+            continue
+        if sy.get("reason") == "ReconcileError" and err is None:
+            err = sy
+        if sy.get("reason") in ("ReconcileDeferred", "ReconcilePaused") and defer is None:
+            defer = sy
+    if err:
+        return REFUSED, f"Synced=False/ReconcileError {err.get('message')!r}; {tail}"
+    if defer:
+        return NOT_ATTEMPTED, (f"Synced=False/{defer.get('reason')}: the runtime declined "
+                               f"to call the handler / reconciliation is paused; {tail}")
+    return UNCONFIRMED, tail
+
+
+def create_pending_report(rows):
+    """Per child: for how long was the create INCOMPLETE, by the predicate in
+    create_pending_latch_check.latch_state (pending strictly newer than the newest of
+    succeeded/failed/not-requested). Presence of the annotation alone is NOT 'pending':
+    the stamp stays on the object after the create completes, and what clears the state
+    is a newer clearer. Runs of consecutive incomplete samples are spans; a span's
+    duration is sample-resolution (+/- one --interval)."""
+    if not rows or any("annotations" not in r[1] for r in rows):
+        return {"recorded": False}
+    spans, cur, unorderable = [], None, []
+    incomplete = within = 0
+    for t, ch, _ in rows:
+        ann = ch["annotations"]
+        try:
+            state = latch.latch_state(ann)
+        except ValueError as e:
+            unorderable.append(str(e))
+            cur = None
+            continue
+        if state != latch.LATCHED:
+            cur = None
+            continue
+        incomplete += 1
+        in_grace = t - latch_epoch(ann[latch.PENDING]) <= CREATE_GRACE_S
+        within += in_grace
+        if cur is None:
+            cur = {"first": t, "last": t, "stamp": ann[latch.PENDING]}
+            spans.append(cur)
+        cur["last"] = t
+    return {"recorded": True, "samples": len(rows), "incomplete_samples": incomplete,
+            "within_grace_samples": within, "unorderable": unorderable,
+            "spans": [{"stamp": x["stamp"], "observed_s": x["last"] - x["first"]}
+                      for x in spans]}
+
+
+def latch_epoch(stamp):
+    return latch._ts(stamp, "pending")[0].timestamp()
+
+
+def _safe_state(ann):
+    try:
+        return latch.latch_state(ann)
+    except ValueError:
+        return None
+
+
+
 def series(samples, comp, child):
     out = []
     for s in samples:
@@ -556,10 +667,14 @@ def classify(flap, rows, passes, P, concurrent=1, margin=DEFAULT_PASS_GAP_S):
                f"  (D={'<=' if bound else ''}{D:.1f}s, P={P:.1f}s)")
         if bound and D >= P:
             rel += "  [D is only an upper bound: start fell between samples]"
-    ready_down = any((ch.get("ready") or {}).get("status") != "True"
-                     for t, ch, _ in rows if flap["start"] <= t <= flap["end"])
+    # A Synced flap is invisible to the parent unless the child's READY also flapped over
+    # the same window: the cdc reads Ready, not Synced. Decided from Ready's own flaps
+    # (non-True bracketed by True), so a child whose Ready is steady at False is invisible
+    # too: nothing about Ready moved.
+    ready_down = any(g["start"] <= flap["end"] and g["end"] >= flap["start"]
+                     for g in find_flaps(rows, "ready"))
     if flap["which"] == "synced" and not ready_down:
-        verdict = ("INVISIBLE TO PARENT: the child's Ready stayed True; only Synced "
+        verdict = ("INVISIBLE TO PARENT: the child's Ready did not flap; only Synced "
                    "flapped, and the parent decides on Ready")
         return {"D": D, "relation": rel, "passes_in_window": len(in_win),
                 "verdict": verdict}
@@ -659,7 +774,8 @@ def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
     P = None
     if len(passes) >= MIN_PASSES_FOR_P:
         P = statistics.median(b - a for a, b in zip(passes, passes[1:]))
-    report = {"passes_observed": len(passes), "P": P, "compositions": {}, "children": 0}
+    report = {"passes_observed": len(passes), "P": P, "compositions": {}, "children": 0,
+              "excluded": [], "unconfirmed": []}
     for comp in comps:
         kids = sorted({k for s in samples for c in s["compositions"]
                        if c["composition"] == comp for k in c["children"]})
@@ -681,9 +797,21 @@ def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
                for c in s["compositions"] if c["composition"] == comp]
         entry = {"parent_writes_seen": len(set(rvs)) - 1, "children": {},
                  "mismatches": mismatches(samples, comp)}
-        per = {}
+        per, pending, states = {}, {}, {}
         for k in kids:
             rows = series(samples, comp, k)
+            if not rows:
+                report["excluded"].append((comp, k, REFUSED,
+                                           "no readable sample of this child"))
+                continue
+            cstate, why = create_state(rows)
+            if cstate in (REFUSED, NOT_ATTEMPTED):
+                report["excluded"].append((comp, k, cstate, why))
+                continue
+            states[k] = (cstate, why)
+            if cstate == UNCONFIRMED:
+                report["unconfirmed"].append((comp, k, why))
+            pending[k] = create_pending_report(rows)
             per[k] = (rows, find_flaps(rows, "ready") + find_flaps(rows, "synced"))
         ready_flaps = [f for _, fl in per.values() for f in fl if f["which"] == "ready"]
         for k, (rows, flaps) in per.items():
@@ -693,17 +821,60 @@ def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
                 hi = f["end"] + (P or 0)
                 conc = sum(1 for g in ready_flaps
                            if g["start"] <= hi and g["end"] >= f["start"])
-                out.append(dict(f, concurrent_ready_flaps=conc,
-                                **classify(f, rows, passes, P, conc, a_gap)))
+                cl = classify(f, rows, passes, P, conc, a_gap)
+                if states[k][0] == UNCONFIRMED:
+                    cl["verdict"] += "  [create unconfirmed]"
+                out.append(dict(f, concurrent_ready_flaps=conc, **cl))
             entry["children"][k] = {
                 "samples": len(rows),
                 "child_writes_seen": len({r[1].get("resourceVersion") for r in rows}) - 1,
+                "create_state": states[k][0], "create_pending": pending[k],
                 "flaps": out}
             report["children"] += 1
         report["compositions"][comp] = entry
+    exc = report["excluded"]
+    confirmed = report["children"] - len(report["unconfirmed"])
+    report["premise"] = None
+    if confirmed < MIN_CHILDREN and (exc or report["unconfirmed"]):
+        nref = sum(1 for e in exc if e[2] == REFUSED)
+        nna = sum(1 for e in exc if e[2] == NOT_ATTEMPTED)
+        nun = len(report["unconfirmed"])
+        first = (exc or [(None, k, None, w) for _, k, w in report["unconfirmed"]])[0]
+        msg = (f"no child's create was confirmed, so no verdict rests on an established "
+               f"create ({nref} refused, {nna} not attempted, {nun} unconfirmed; expected "
+               f">= {MIN_CHILDREN} confirmed). First: {first[1]}: {first[3]}")
+        if not report["unconfirmed"]:
+            # refused / not attempted only: no transitions were observed to show
+            raise NothingFound(msg)
+        # unconfirmed children WERE observed: keep that data, but the run still fails
+        report["premise"] = {"message": msg, "header": (
+            f"PREMISE FAILED: no child's create was confirmed ({nref} refused, {nna} not "
+            f"attempted, {nun} unconfirmed). The verdicts below are what was observed; "
+            "none of them rests on an established create, so none should be cited as a "
+            "result.\n" + UNCONFIRMED_NOTE)}
+        return report
     if report["children"] < MIN_CHILDREN:
         raise NothingFound("no children found")
     return report
+
+
+def render_pending(cp):
+    if not cp.get("recorded"):
+        return ("create-pending: NOT RECORDED (this record has no annotations); the "
+                "15s create-recovery re-observe cannot be ruled in or out")
+    if cp["unorderable"]:
+        return "create-pending: UNORDERABLE stamp(s): " + "; ".join(cp["unorderable"])
+    if not cp["spans"]:
+        return (f"create-pending: never incomplete in {cp['samples']} samples "
+                "(the 15s create-recovery re-observe was not active)")
+    sp = "; ".join(f"stamp {x['stamp']} observed incomplete for {x['observed_s']:.0f}s"
+                   for x in cp["spans"])
+    return (f"create-pending: INCOMPLETE in {cp['incomplete_samples']} of "
+            f"{cp['samples']} samples, {len(cp['spans'])} span(s) [{sp}] (sample "
+            f"resolution, +/- one --interval); {cp['within_grace_samples']} sample(s) within the "
+            f"{CREATE_GRACE_S:.0f}s grace, where the runtime re-observes every "
+            f"{REOBSERVE_S:.0f}s. Those 15s re-observes are NOT the mechanism of any "
+            "hint arm")
 
 
 VERDICTS = ("PROPAGATED", "NOT PROPAGATED", "NOT SAMPLED", "NOT ASSESSABLE",
@@ -736,7 +907,9 @@ def render(rec, rep):
             o.append(f"  MISMATCH: {m}")
         for k, c in e["children"].items():
             o.append(f"  child {k}: {c['samples']} samples, "
-                     f"{c['child_writes_seen']} writes seen, {len(c['flaps'])} flap(s)")
+                     f"{c['child_writes_seen']} writes seen, {len(c['flaps'])} flap(s)"
+                     + ("  [create unconfirmed]" if c["create_state"] == UNCONFIRMED else ""))
+            o.append("    " + render_pending(c["create_pending"]))
             for f in c["flaps"]:
                 o.append(f"    flap on {f['which']}: reasons={sorted(map(str, f['reasons']))}"
                          f"  D={'<=' if f.get('bound') else ''}{f['D']:.1f}s  P={'%.1fs' % P if P is not None else 'n/a'}"
@@ -749,6 +922,24 @@ def render(rec, rep):
     o.append("== VERDICT SUMMARY (%d flap(s)) ==" % sum(n.values()))
     for v in VERDICTS:
         o.append(f"  {v:20s} {n[v]}")
+    exc = rep["excluded"]
+    o.append(f"  {'CREATE REFUSED':20s} {sum(1 for e in exc if e[2] == REFUSED)}  "
+             "(excluded from every verdict above)")
+    o.append(f"  {'CREATE NOT ATTEMPTED':20s} {sum(1 for e in exc if e[2] == NOT_ATTEMPTED)}  "
+             "(excluded from every verdict above)")
+    o.append(f"  {'CREATE UNCONFIRMED':20s} {len(rep['unconfirmed'])}  "
+             "(measured; every verdict for these children is flagged [create unconfirmed])")
+    if rep["unconfirmed"]:
+        o.append("    " + UNCONFIRMED_NOTE)
+    for comp, k, st, why in exc:
+        if st == REFUSED:
+            o.append("    PRECONDITION FAILED: create refused, nothing was measured for "
+                     f"this child: {k} ({why})")
+        else:
+            o.append("    PRECONDITION FAILED: create not attempted, nothing was measured "
+                     f"for this child: {k} ({why})")
+    for comp, k, why in rep["unconfirmed"]:
+        o.append(f"    create unconfirmed (measured, flagged): {k} ({why})")
     if n["NOT ASSESSABLE"] > sum(n.values()) / 2:
         o.append("  NOTE: most flaps are NOT ASSESSABLE. The parent's status cannot "
                  "attribute them at this scale (three-name cap, parent already not "
@@ -791,6 +982,11 @@ def main(argv=None):
     except (RuntimeError, OSError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
+    if rep.get("premise"):
+        print(rep["premise"]["header"])
+        print(render(rec, rep))
+        print(f"NOTHING FOUND: {rep['premise']['message']}", file=sys.stderr)
+        return 3
     print(render(rec, rep))
     return 0
 
