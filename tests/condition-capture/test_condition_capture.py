@@ -96,14 +96,74 @@ class ParentAlreadyDown(unittest.TestCase):
         self.assertNotIn("NOT PROPAGATED", v)
 
     def test_unattributable_message_churn_is_not_evidence(self):
-        def churn(r):  # message changes but never names the child (core-provider#298)
+        def churn(r):  # wording churns, no name and no count change (core-provider#298)
             for smp in r["samples"]:
                 rd = smp["compositions"][0]["parent"]["ready"]
                 if rd["status"] == "False" and "db-reasononly" in rd["message"]:
-                    rd["message"] = "2 of 2 managed children are not ready: net-other"
+                    rd["message"] = "1 of 2 managed children are not ready: net-other (waiting)"
         v = self.verdict(churn)
         self.assertIn("NOT ASSESSABLE", v)
         self.assertIn("does not name", v)
+
+
+class EvidenceRules(unittest.TestCase):
+    DB = "vpcs.network.arubacloud.com/ns/db-reasononly"
+
+    def db_block(self, mutate):
+        r = base()
+        mutate(r)
+        p = run(with_record(r))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        lines = p.stdout.splitlines()
+        i = [n for n, l in enumerate(lines) if l.startswith("  child") and
+             l.split()[1].endswith("db-reasononly:")][0]
+        return "\n".join(lines[i:i + 4])
+
+    @staticmethod
+    def msgs(r, before, after):
+        """Rewrite the parent message in the db flap window: `before` until the second
+        pass-write, `after` once the fixture's message has changed."""
+        for smp in r["samples"]:
+            rd = smp["compositions"][0]["parent"]["ready"]
+            if rd["status"] == "False" and rd["lastTransitionTime"].endswith("10:06:00Z"):
+                rd["message"] = after if "db-reasononly" in rd["message"] else before
+
+    def test_count_only_change_with_sole_flapper_is_attributable(self):
+        v = self.db_block(lambda r: self.msgs(
+            r, "4 of 36 managed children are not ready: a, b, c (+1 more)",
+            "5 of 36 managed children are not ready: a, b, c (+2 more)"))
+        self.assertIn("PROPAGATED (count change attributable only because this was the "
+                      "SOLE Ready flap", v)
+
+    def test_count_only_change_with_two_flappers_is_unattributed(self):
+        def two(r):
+            self.msgs(r, "4 of 36 managed children are not ready: a, b, c (+1 more)",
+                      "5 of 36 managed children are not ready: a, b, c (+2 more)")
+            # a second child flaps Ready inside the same window
+            for smp in r["samples"]:
+                t = round(smp["t"] - r["samples"][0]["t"])
+                if 390 <= t < 430:
+                    smp["compositions"][0]["children"][
+                        "vpcs.network.arubacloud.com/ns/sg-notprop"]["ready"] = {
+                        "status": "False", "reason": "Creating", "message": "",
+                        "lastTransitionTime": "2026-11-28T10:06:30Z"}
+        v = self.db_block(two)
+        self.assertIn("NOT ASSESSABLE", v)
+        self.assertIn("UNATTRIBUTED COUNT CHANGE", v)
+        self.assertNotIn("PROPAGATED (", v)
+
+    def test_rv_moving_without_attributable_change_is_not_assessable(self):
+        r = base()
+        for smp in r["samples"]:
+            if round(smp["t"] - r["samples"][0]["t"]) >= 245:
+                smp["compositions"][0]["parent"]["resourceVersion"] = "999"
+        p = run(with_record(r))
+        sg = [l for l in p.stdout.splitlines() if "sg-notprop" in l][0]
+        i = p.stdout.splitlines().index(sg)
+        v = "\n".join(p.stdout.splitlines()[i:i + 4])
+        self.assertIn("NOT ASSESSABLE", v)
+        self.assertIn("WAS written", v)
+        self.assertNotIn("NOT PROPAGATED", v)
 
 
 class EmptyInputMustFail(unittest.TestCase):
@@ -202,7 +262,10 @@ class ManagedState(unittest.TestCase):
                          "name": "gone", "namespace": "ns"},
                         {"apiVersion": "network.arubacloud.com/v1", "resource": "",
                          "name": "no-resource"},
-                        {"apiVersion": "a/b/c", "resource": "x", "name": "bad-api"}]}}
+                        {"apiVersion": "a/b/c", "resource": "x", "name": "bad-api"},
+                        # schema.ParseGroupVersion accepts both: the rollup GETs them
+                        {"apiVersion": "/v1", "resource": "x", "name": "slash-lead"},
+                        {"apiVersion": "v1/", "resource": "y", "name": "slash-trail"}]}}
 
             def run(self, *a, **k):
                 calls.append(a)
@@ -213,7 +276,9 @@ class ManagedState(unittest.TestCase):
         out = cc.sample_once(FakeKube(), [("comps.composition.krateo.io", "ns", "chain")])
         c = out["compositions"][0]
         fetched = [x[2] for x in calls]
-        self.assertEqual(fetched, ["ok", "gone"], "malformed entries must not be GET")
+        self.assertEqual(fetched, ["ok", "gone", "slash-lead", "slash-trail"],
+                         "only a/b/c and the empty-field entry may be skipped")
+        self.assertEqual([x[1] for x in calls][2:], ["x", "y.v1"])
         self.assertEqual(c["managed_state"], "present")
         self.assertEqual(len(c["managed_skipped_no_get"]), 2)
         self.assertEqual(len(c["managed_recorded_but_absent"]), 1)

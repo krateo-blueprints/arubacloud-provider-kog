@@ -174,11 +174,14 @@ def discover_compositions(kube):
 
 
 def api_group(api_version):
-    """group of an apiVersion, '' for the core group; None when unparsable."""
-    if not api_version or api_version.count("/") > 1 or api_version.startswith("/") \
-            or api_version.endswith("/"):
+    """Mirror of k8s.io schema.ParseGroupVersion, which core-provider's childEvalOf uses:
+    0 slashes -> core group; 1 slash -> split there (so "/v1" and "v1/" PARSE, and are
+    fetched); 2+ slashes -> error, and the rollup counts that entry healthy WITHOUT a GET.
+    Returns None only in the error case. The empty string is caught earlier, by the
+    empty-field check, and never reaches here."""
+    if api_version.count("/") >= 2:
         return None
-    return api_version.split("/")[0] if "/" in api_version else ""
+    return api_version.split("/", 1)[0] if "/" in api_version else ""
 
 
 def managed_state(parent_obj):
@@ -441,68 +444,92 @@ def _names(msg, name):
     return bool(msg) and re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", msg) is not None
 
 
-def parent_evidence(rows, flap, P):
+def _count(msg):
+    m = re.match(r"\s*(\d+) of (\d+) ", msg or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _fmt(r):
+    return f"{r.get('status')}/{r.get('reason')}/{r.get('message')!r}"
+
+
+def _pass_without_write(rows, in_win, margin):
+    """True/False/None. Did the parent's resourceVersion stay put across at least one
+    pass inside the window? Compares the last sample at or before the pass with the first
+    sample more than `margin` seconds after it. None when no pass has both samples."""
+    tested = False
+    for p in in_win:
+        pre = [r for r in rows if r[0] <= p]
+        post = [r for r in rows if r[0] > p + margin]
+        if not pre or not post:
+            continue
+        tested = True
+        if pre[-1][2].get("resourceVersion") == post[0][2].get("resourceVersion"):
+            return True
+    return False if tested else None
+
+
+def parent_evidence(rows, flap, P, concurrent):
     """What did the PARENT show for this flap? Returns (evidence, parent_was_down, context).
 
-    lastTransitionTime moves ONLY when a condition's status changes (unstructured-runtime
-    condition.Upsert keeps the old time when the status is unchanged), so a parent that is
-    already Ready!=True when a child flaps rewrites reason/message and leaves the
-    timestamp alone. Evidence, strongest first:
-      1. ATTRIBUTABLE message diff: between consecutive samples, the parent's Ready
-         message gains or loses THIS child's name. Before/after strings are reported.
-      2. a STATUS transition: parent sampled Ready!=True when it was True at flap start,
-         or its lastTransitionTime falls in the window.
-    Not evidence, only context: resourceVersion movement (any write, any cause) and a
-    message/reason change that does not name this child (messages can churn for one
-    logical state, core-provider#298).
+    lastTransitionTime moves ONLY when a condition's status changes (condition.Upsert
+    keeps the old time when the status is unchanged), so a parent already Ready!=True
+    rewrites reason/message and leaves the timestamp alone. Priority:
+      1. ATTRIBUTABLE message diff: this child's NAME appears in / disappears from the
+         parent's Ready message between consecutive samples. The message lists at most 3
+         children ("a, b, c (+N more)"), so a flapping child is often not named.
+      2. A count-only change ("4 of 36" -> "5 of 36") is "some child", not this one: it
+         is recorded as UNATTRIBUTED COUNT CHANGE and counts as evidence only when this
+         was the sole Ready flap in the window (`concurrent` == 1), which is stated.
+      3. A STATUS transition (lastTransitionTime in window, or parent not-True when it was
+         True at start).
+    resourceVersion is NOT evidence of propagation (it moves on any write); it is only the
+    no-write test that NOT PROPAGATED requires, applied in classify().
     """
     start, end, name = flap["start"], flap["end"], flap["child"]
     hi = end + (P or 0)
     before = [r for r in rows if r[0] <= start]
-    base = (before[-1] if before else rows[0])[2]
-    base_r = base.get("ready") or {}
-    was_down = base_r.get("status") != "True"
+    base = (before[-1] if before else rows[0])[2].get("ready") or {}
+    was_down = base.get("status") != "True"
     ctx = []
-    # 1. attributable diff
     for i in range(1, len(rows)):
         t, _, cur = rows[i]
         if not (start <= t <= hi):
             continue
         pr, cr = rows[i - 1][2].get("ready") or {}, cur.get("ready") or {}
-        if pr.get("message") != cr.get("message") or pr.get("reason") != cr.get("reason"):
-            if _names(pr.get("message"), name) != _names(cr.get("message"), name):
-                return (f"attributable: parent Ready message at +{t-start:.0f}s "
-                        f"{'gained' if _names(cr.get('message'), name) else 'lost'} "
-                        f"{name!r}: before {pr.get('reason')}/{pr.get('message')!r} -> "
-                        f"after {cr.get('reason')}/{cr.get('message')!r}", was_down, ctx)
-            ctx.append(f"parent message/reason changed but does not name {name!r}: "
-                       f"{pr.get('reason')}/{pr.get('message')!r} -> "
-                       f"{cr.get('reason')}/{cr.get('message')!r}")
-    # 2. status transition
+        if pr.get("message") == cr.get("message") and pr.get("reason") == cr.get("reason"):
+            continue
+        shown = f"before {_fmt(pr)} -> after {_fmt(cr)}"
+        if _names(pr.get("message"), name) != _names(cr.get("message"), name):
+            return (f"attributable (name {'gained' if _names(cr.get('message'), name) else 'lost'}"
+                    f" at +{t-start:.0f}s): {shown}", was_down, ctx)
+        pc, cc = _count(pr.get("message")), _count(cr.get("message"))
+        if pc and cc and pc != cc:
+            if concurrent == 1:
+                return (f"count change attributable only because this was the SOLE Ready "
+                        f"flap in the window (+{t-start:.0f}s): {shown}", was_down, ctx)
+            ctx.append(f"UNATTRIBUTED COUNT CHANGE ({concurrent} Ready flaps overlapped "
+                       f"the window): {shown}")
+        else:
+            ctx.append(f"parent message/reason changed but does not name {name!r}: {shown}")
     if not was_down:
         for t, _, par in rows:
             r = par.get("ready") or {}
             if start <= t <= hi and r.get("status") != "True":
-                return (f"status transition: parent Ready={r.get('status')}/"
-                        f"{r.get('reason')} sampled at +{t-start:.0f}s", was_down, ctx)
+                return (f"status transition: parent Ready={_fmt(r)} sampled at "
+                        f"+{t-start:.0f}s", was_down, ctx)
     for t, _, par in rows:
         ltt = (par.get("ready") or {}).get("lastTransitionTime")
         if ltt and start <= parse_ts(ltt) <= hi:
             return (f"status transition: parent Ready lastTransitionTime {ltt} falls in "
                     "the window", was_down, ctx)
-    rvs = [par.get("resourceVersion") for t, _, par in rows if start <= t <= hi]
-    rv0 = base.get("resourceVersion")
-    if rvs and any(v != rv0 for v in rvs):
-        ctx.append(f"parent resourceVersion moved {rv0} -> {rvs[-1]} (any write; not "
-                   "attributable)")
     return None, was_down, ctx
 
 
-def classify(flap, rows, passes, P):
+def classify(flap, rows, passes, P, concurrent=1, margin=DEFAULT_PASS_GAP_S):
     D = flap["end"] - flap["start"]
     bound = flap.get("bound", False)
     in_win = [p for p in passes if flap["start"] <= p <= flap["end"]]
-    rel = None
     if P is None:
         rel = "D vs P: UNDEFINED (fewer than 2 parent passes observed)"
     else:
@@ -515,32 +542,48 @@ def classify(flap, rows, passes, P):
     if flap["which"] == "synced" and not ready_down:
         verdict = ("INVISIBLE TO PARENT: the child's Ready stayed True; only Synced "
                    "flapped, and the parent decides on Ready")
+        return {"D": D, "relation": rel, "passes_in_window": len(in_win),
+                "verdict": verdict}
+    ev, was_down, ctx = parent_evidence(rows, flap, P, concurrent)
+    if ev:
+        verdict = f"PROPAGATED ({ev})"
+    elif P is None:
+        verdict = "INDETERMINATE (no pass interval to compare D against)"
+    elif not in_win and D < P:
+        verdict = ("NOT SAMPLED: D < P and no parent pass fell inside the flap; the "
+                   "parent never had the chance to observe it. This is NOT a "
+                   "propagation failure")
+    elif bound and D >= P:
+        verdict = ("INDETERMINATE: the flap began between samples, so D is only an "
+                   "upper bound that is not below P; shorten --interval")
+    elif not in_win:
+        verdict = ("INDETERMINATE: D >= P yet the pass log shows no pass inside the "
+                   "window; the cdc log has a gap, so neither 'not sampled' nor "
+                   "'not propagated' can be claimed")
+    elif was_down:
+        verdict = ("NOT ASSESSABLE: the parent was already Ready != True at flap start "
+                   "(no status transition available to make) and no change attributable "
+                   "to this child appeared. Neither propagation nor its failure")
     else:
-        ev, was_down, ctx = parent_evidence(rows, flap, P)
-        if ev:
-            verdict = f"PROPAGATED ({ev})"
-        elif P is None:
-            verdict = "INDETERMINATE (no pass interval to compare D against)"
-        elif not in_win and D < P:
-            verdict = ("NOT SAMPLED: D < P and no parent pass fell inside the flap; the "
-                       "parent never had the chance to observe it. This is NOT a "
-                       "propagation failure")
-        elif bound and D >= P:
-            verdict = ("INDETERMINATE: the flap began between samples, so D is only an "
-                       "upper bound that is not below P; shorten --interval")
-        elif not in_win:
-            verdict = ("INDETERMINATE: D >= P yet the pass log shows no pass inside the "
-                       "window; the cdc log has a gap, so neither 'not sampled' nor "
-                       "'not propagated' can be claimed")
-        elif was_down:
-            verdict = ("NOT ASSESSABLE: the parent was already Ready != True at flap "
-                       "start (no status transition available to make) and no change "
-                       "attributable to this child appeared. Neither propagation nor "
-                       "its failure")
-        else:
+        nowrite = _pass_without_write(rows, in_win, margin)
+        if nowrite is True:
             verdict = (f"NOT PROPAGATED: {len(in_win)} parent pass(es) fell inside the "
-                       "flap and the parent showed nothing")
-    if not (flap["which"] == "synced" and not ready_down) and ctx:
+                       "flap, the parent's resourceVersion did not move across at least "
+                       "one of them (no write attempted), and Ready showed nothing")
+        elif nowrite is False:
+            verdict = ("NOT ASSESSABLE: the parent WAS written across every pass in the "
+                       "window (resourceVersion moved) but nothing attributable to this "
+                       "child changed; something was written and it cannot be said to "
+                       "be about this child")
+        else:
+            verdict = ("NOT ASSESSABLE: no sample brackets any pass inside the window, so "
+                       "'no write across a pass' cannot be tested; shorten --interval")
+    # raw strings beside every verdict, so a reader can judge the diff themselves
+    before = [r for r in rows if r[0] <= flap["start"]]
+    pre = (before[-1] if before else rows[0])[2].get("ready") or {}
+    post = [r for r in rows if r[0] <= flap["end"] + (P or 0)][-1][2].get("ready") or {}
+    verdict += f"  [parent Ready at flap start: {_fmt(pre)}; at window end: {_fmt(post)}]"
+    if ctx:
         verdict += "  [context: " + "; ".join(ctx) + "]"
     return {"D": D, "relation": rel, "passes_in_window": len(in_win), "verdict": verdict}
 
@@ -575,6 +618,7 @@ def mismatches(samples, comp):
 
 
 def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
+    a_gap = pass_gap
     samples = rec.get("samples") or []
     if not samples:
         raise NothingFound("the record holds 0 samples")
@@ -618,14 +662,24 @@ def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
                for c in s["compositions"] if c["composition"] == comp]
         entry = {"parent_writes_seen": len(set(rvs)) - 1, "children": {},
                  "mismatches": mismatches(samples, comp)}
+        per = {}
         for k in kids:
             rows = series(samples, comp, k)
-            flaps = find_flaps(rows, "ready") + find_flaps(rows, "synced")
+            per[k] = (rows, find_flaps(rows, "ready") + find_flaps(rows, "synced"))
+        ready_flaps = [f for _, fl in per.values() for f in fl if f["which"] == "ready"]
+        for k, (rows, flaps) in per.items():
+            out = []
+            for f in flaps:
+                f = dict(f, child=(rows[-1][1].get("name") or k.rsplit("/", 1)[-1]))
+                hi = f["end"] + (P or 0)
+                conc = sum(1 for g in ready_flaps
+                           if g["start"] <= hi and g["end"] >= f["start"])
+                out.append(dict(f, concurrent_ready_flaps=conc,
+                                **classify(f, rows, passes, P, conc, a_gap)))
             entry["children"][k] = {
                 "samples": len(rows),
                 "child_writes_seen": len({r[1].get("resourceVersion") for r in rows}) - 1,
-                "flaps": [dict(f, **classify(dict(f, child=(rows[-1][1].get("name") or k.rsplit("/", 1)[-1])), rows, passes, P))
-                          for f in flaps]}
+                "flaps": out}
             report["children"] += 1
         report["compositions"][comp] = entry
     if report["children"] < MIN_CHILDREN:
@@ -654,7 +708,8 @@ def render(rec, rep):
                 o.append(f"    flap on {f['which']}: reasons={sorted(map(str, f['reasons']))}"
                          f"  D={'<=' if f.get('bound') else ''}{f['D']:.1f}s  P={'%.1fs' % P if P is not None else 'n/a'}"
                          f"  passes observed={rep['passes_observed']}"
-                         f"  passes in window={f['passes_in_window']}")
+                         f"  passes in window={f['passes_in_window']}"
+                         f"  Ready flaps overlapping window={f['concurrent_ready_flaps']}")
                 o.append(f"      relation: {f['relation']}")
                 o.append(f"      verdict:  {f['verdict']}")
     return "\n".join(o)
