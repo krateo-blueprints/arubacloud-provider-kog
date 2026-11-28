@@ -406,6 +406,11 @@ CREATE_GRACE_S = 120.0
 REOBSERVE_S = 15.0
 
 
+UNCONFIRMED_NOTE = (
+    "Every [create unconfirmed] verdict is a Synced-only flap (a Ready flap needs a prior "
+    "Ready=True, which would confirm the create) and the parent reads only Ready, so none "
+    "of them can bear on parent propagation.")
+
 CONFIRMED, REFUSED, NOT_ATTEMPTED, UNCONFIRMED = (
     "confirmed", "refused", "not-attempted", "unconfirmed")
 
@@ -662,10 +667,14 @@ def classify(flap, rows, passes, P, concurrent=1, margin=DEFAULT_PASS_GAP_S):
                f"  (D={'<=' if bound else ''}{D:.1f}s, P={P:.1f}s)")
         if bound and D >= P:
             rel += "  [D is only an upper bound: start fell between samples]"
-    ready_down = any((ch.get("ready") or {}).get("status") != "True"
-                     for t, ch, _ in rows if flap["start"] <= t <= flap["end"])
+    # A Synced flap is invisible to the parent unless the child's READY also flapped over
+    # the same window: the cdc reads Ready, not Synced. Decided from Ready's own flaps
+    # (non-True bracketed by True), so a child whose Ready is steady at False is invisible
+    # too: nothing about Ready moved.
+    ready_down = any(g["start"] <= flap["end"] and g["end"] >= flap["start"]
+                     for g in find_flaps(rows, "ready"))
     if flap["which"] == "synced" and not ready_down:
-        verdict = ("INVISIBLE TO PARENT: the child's Ready stayed True; only Synced "
+        verdict = ("INVISIBLE TO PARENT: the child's Ready did not flap; only Synced "
                    "flapped, and the parent decides on Ready")
         return {"D": D, "relation": rel, "passes_in_window": len(in_win),
                 "verdict": verdict}
@@ -825,16 +834,25 @@ def analyse(rec, pass_gap=DEFAULT_PASS_GAP_S):
         report["compositions"][comp] = entry
     exc = report["excluded"]
     confirmed = report["children"] - len(report["unconfirmed"])
+    report["premise"] = None
     if confirmed < MIN_CHILDREN and (exc or report["unconfirmed"]):
         nref = sum(1 for e in exc if e[2] == REFUSED)
         nna = sum(1 for e in exc if e[2] == NOT_ATTEMPTED)
         nun = len(report["unconfirmed"])
         first = (exc or [(None, k, None, w) for _, k, w in report["unconfirmed"]])[0]
-        raise NothingFound(
-            f"no child has a confirmed create ({nref} refused, {nna} not attempted, "
-            f"{nun} unconfirmed; expected >= {MIN_CHILDREN} confirmed): the code path "
-            f"under test never demonstrably ran, so nothing was measured. First: "
-            f"{first[1]}: {first[3]}")
+        msg = (f"no child's create was confirmed, so no verdict rests on an established "
+               f"create ({nref} refused, {nna} not attempted, {nun} unconfirmed; expected "
+               f">= {MIN_CHILDREN} confirmed). First: {first[1]}: {first[3]}")
+        if not report["unconfirmed"]:
+            # refused / not attempted only: no transitions were observed to show
+            raise NothingFound(msg)
+        # unconfirmed children WERE observed: keep that data, but the run still fails
+        report["premise"] = {"message": msg, "header": (
+            f"PREMISE FAILED: no child's create was confirmed ({nref} refused, {nna} not "
+            f"attempted, {nun} unconfirmed). The verdicts below are what was observed; "
+            "none of them rests on an established create, so none should be cited as a "
+            "result.\n" + UNCONFIRMED_NOTE)}
+        return report
     if report["children"] < MIN_CHILDREN:
         raise NothingFound("no children found")
     return report
@@ -911,6 +929,8 @@ def render(rec, rep):
              "(excluded from every verdict above)")
     o.append(f"  {'CREATE UNCONFIRMED':20s} {len(rep['unconfirmed'])}  "
              "(measured; every verdict for these children is flagged [create unconfirmed])")
+    if rep["unconfirmed"]:
+        o.append("    " + UNCONFIRMED_NOTE)
     for comp, k, st, why in exc:
         if st == REFUSED:
             o.append("    PRECONDITION FAILED: create refused, nothing was measured for "
@@ -962,6 +982,11 @@ def main(argv=None):
     except (RuntimeError, OSError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
+    if rep.get("premise"):
+        print(rep["premise"]["header"])
+        print(render(rec, rep))
+        print(f"NOTHING FOUND: {rep['premise']['message']}", file=sys.stderr)
+        return 3
     print(render(rec, rep))
     return 0
 

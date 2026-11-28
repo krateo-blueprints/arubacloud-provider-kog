@@ -261,8 +261,10 @@ class CreatePrecondition(unittest.TestCase):
         p = run(with_record(self.with_refused(only=True)))
         self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
         self.assertIn("NOTHING FOUND", p.stderr)
-        self.assertIn("no child has a confirmed create (1 refused, 0 not attempted, "
-                      "0 unconfirmed", p.stderr)
+        self.assertIn("no child's create was confirmed, so no verdict rests on an "
+                      "established create (1 refused, 0 not attempted, 0 unconfirmed",
+                      p.stderr)
+        self.assertNotIn("nothing was measured", p.stderr)
         self.assertEqual(p.stdout, "")
 
     def synced_as(self, status, reason, only=False):
@@ -313,17 +315,26 @@ class CreatePrecondition(unittest.TestCase):
         block = "\n".join(lines[i:i + 6])
         self.assertIn("flap on synced", block)
         self.assertIn("verdict:", block)
-        self.assertRegex(block, r"verdict:.*\[create unconfirmed\]")
+        self.assertRegex(block, r"verdict:  INVISIBLE TO PARENT.*\[create unconfirmed\]")
 
-    def test_breakdown_is_named_when_nothing_is_confirmed(self):
-        for (st, rs), want in ((("False", "ReconcileDeferred"),
-                                 "0 refused, 1 not attempted, 0 unconfirmed"),
-                                (("True", "ReconcileSuccess"),
-                                 "0 refused, 0 not attempted, 1 unconfirmed")):
-            p = run(with_record(self.synced_as(st, rs, only=True)))
-            self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
-            self.assertIn(want, p.stderr)
-            self.assertEqual(p.stdout, "")
+    def test_not_attempted_only_exits_3_with_empty_stdout(self):
+        p = run(with_record(self.synced_as("False", "ReconcileDeferred", only=True)))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("(0 refused, 1 not attempted, 0 unconfirmed", p.stderr)
+        self.assertEqual(p.stdout, "", "an unattempted create produces nothing to show")
+
+    def test_unconfirmed_only_exits_3_but_prints_what_was_observed(self):
+        p = run(with_record(self.synced_as("True", "ReconcileSuccess", only=True)))
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        self.assertIn("NOTHING FOUND", p.stderr)
+        self.assertIn("(0 refused, 0 not attempted, 1 unconfirmed", p.stderr)
+        self.assertNotEqual(p.stdout, "")
+        self.assertTrue(p.stdout.startswith(
+            "PREMISE FAILED: no child's create was confirmed (0 refused, 0 not attempted, "
+            "1 unconfirmed). The verdicts below are what was observed; none of them rests "
+            "on an established create, so none should be cited as a result."), p.stdout)
+        self.assertIn("Every [create unconfirmed] verdict is a Synced-only flap", p.stdout)
+        self.assertIn("none of them can bear on parent propagation", p.stdout)
 
     def test_pending_duration_reported(self):
         r = base()
