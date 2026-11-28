@@ -250,7 +250,8 @@ class CreatePrecondition(unittest.TestCase):
     def test_refused_child_is_excluded_and_counted(self):
         p = run(with_record(self.with_refused()))
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("PRECONDITION FAILED  1", p.stdout)
+        self.assertRegex(p.stdout, r"CREATE REFUSED\s+1\s")
+        self.assertRegex(p.stdout, r"CREATE NOT ATTEMPTED\s+0\s")
         self.assertIn("PRECONDITION FAILED: create refused, nothing was measured for "
                       "this child: " + self.REFUSED, p.stdout)
         self.assertNotIn("  child " + self.REFUSED, p.stdout, "no verdicts for it")
@@ -260,16 +261,69 @@ class CreatePrecondition(unittest.TestCase):
         p = run(with_record(self.with_refused(only=True)))
         self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
         self.assertIn("NOTHING FOUND", p.stderr)
-        self.assertIn("every child failed the create precondition", p.stderr)
+        self.assertIn("no child has a confirmed create (1 refused, 0 not attempted, "
+                      "0 unconfirmed", p.stderr)
         self.assertEqual(p.stdout, "")
 
-    def test_slow_child_without_reconcile_error_is_not_called_refused(self):
-        r = self.with_refused()
+    def synced_as(self, status, reason, only=False):
+        r = self.with_refused(only=only)
         for smp in r["samples"]:
             smp["compositions"][0]["children"][self.REFUSED]["synced"] = {
-                "status": "True", "reason": "ReconcileSuccess"}
+                "status": status, "reason": reason, "message": ""}
+        return r
+
+    def test_deferred_and_paused_are_not_attempted_and_excluded(self):
+        for reason in ("ReconcileDeferred", "ReconcilePaused"):
+            p = run(with_record(self.synced_as("False", reason)))
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertRegex(p.stdout, r"CREATE REFUSED\s+0\s")
+            self.assertRegex(p.stdout, r"CREATE NOT ATTEMPTED\s+1\s")
+            self.assertIn("create not attempted, nothing was measured for this child: "
+                          + self.REFUSED, p.stdout)
+            self.assertIn(reason, p.stdout)
+            self.assertNotIn("  child " + self.REFUSED, p.stdout)
+
+    def test_slow_child_is_measured_and_flagged_not_excluded(self):
+        p = run(with_record(self.synced_as("True", "ReconcileSuccess")))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertRegex(p.stdout, r"CREATE REFUSED\s+0\s")
+        self.assertRegex(p.stdout, r"CREATE NOT ATTEMPTED\s+0\s")
+        self.assertRegex(p.stdout, r"CREATE UNCONFIRMED\s+1\s")
+        self.assertIn("  child " + self.REFUSED, p.stdout)
+        self.assertIn("[create unconfirmed]", p.stdout)
+
+    def test_unconfirmed_child_verdicts_carry_the_flag(self):
+        # Ready never True (so unconfirmed), but Synced goes True -> False/Other -> True:
+        # a flap exists, and its verdict must say the create was never confirmed.
+        r = self.with_refused()
+        t0 = r["samples"][0]["t"]
+        for smp in r["samples"]:
+            t = round(smp["t"] - t0)
+            bad = smp["compositions"][0]["children"][self.REFUSED]
+            bad["synced"] = ({"status": "False", "reason": "SomethingElse", "message": "",
+                              "lastTransitionTime": "2026-11-28T10:01:40Z"}
+                             if 100 <= t < 160 else
+                             {"status": "True", "reason": "ReconcileSuccess",
+                              "message": "", "lastTransitionTime": "2026-11-28T10:00:00Z"})
         p = run(with_record(r))
-        self.assertIn("PRECONDITION FAILED  0", p.stdout)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        lines = p.stdout.splitlines()
+        i = [n for n, l in enumerate(lines)
+             if l.startswith("  child " + self.REFUSED)][0]
+        block = "\n".join(lines[i:i + 6])
+        self.assertIn("flap on synced", block)
+        self.assertIn("verdict:", block)
+        self.assertRegex(block, r"verdict:.*\[create unconfirmed\]")
+
+    def test_breakdown_is_named_when_nothing_is_confirmed(self):
+        for (st, rs), want in ((("False", "ReconcileDeferred"),
+                                 "0 refused, 1 not attempted, 0 unconfirmed"),
+                                (("True", "ReconcileSuccess"),
+                                 "0 refused, 0 not attempted, 1 unconfirmed")):
+            p = run(with_record(self.synced_as(st, rs, only=True)))
+            self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+            self.assertIn(want, p.stderr)
+            self.assertEqual(p.stdout, "")
 
     def test_pending_duration_reported(self):
         r = base()
