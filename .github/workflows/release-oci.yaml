@@ -47,6 +47,30 @@
 # `if ! helm template` failure branch, so on a chart that renders its silence is control
 # flow, not evidence.
 #
+# PIN MOVED 2.3.0 -> 2.3.2 (5787de78 -> ce078932), 2026-11-28; the 2.3.0 entry above is kept as
+# written. `2.3.2` dereferences to ce0789323d6a51a9928d574b420a0e57385c1498. compare API with
+# THIS PIN AS BASE (5787de78...ce078932): status=ahead, ahead_by=5, behind_by=0 -- a strict
+# descendant, so this is the first application of the standing instruction below, and it
+# resolved to "take it". ONE FILE DIFFERS, verified by tree/blob object id between charts
+# 1.13.2 and 1.14.1 rather than by a diff stat (which would not rule out a same-size change):
+# publish-chart.yaml e0017f23 != 6ea30a1a is the ONLY difference; release-preflight.yaml
+# 9f6eceef == 9f6eceef and actions/index-gate 4d721724 == 4d721724 (tree, both files too) are
+# byte-identical. The change: publish-chart's retried curls gain `--connect-timeout 10
+# --max-time 30`, so a stalled GHCR or Pages connection fails with its diagnostic instead of
+# hanging. 2.3.2 also carries 2.3.1's fixture charts for the image gate's two advisories
+# (.github#87). No input changes.
+# WHAT IS PROVED: 0.6.0 PROVED 2.3.0's index push. Run 46146503855, all seven jobs green
+# including publish-index/publish -- the first execution of that path anywhere. The served
+# index answered HTTP 200 carrying 0.6.0 among 823 charts; the consumer URL went 302 -> 200 at
+# 5098 bytes; 0 CHART_VERSION survivors in the published archive. That withdraws the "index
+# PUSH of 2.3.0 is unexercised" limit stated above.
+# WHAT IS NOT: 2.3.2's stall fix is unexercised by anyone. The 0.6.0 run finished in under two
+# minutes, so the timeout never came into play, and NO DRY RUN CAN EVER VALIDATE IT: the only
+# changed file is on the index-push path, which `dry_run: true` skips. A dry run of this bump
+# proves the caller still STARTS and the pre-push gates still pass, and nothing about the curl
+# change. That is the reason to take it promptly rather than wait: waiting buys no evidence,
+# only continued exposure.
+#
 # [SUPERSEDED by the move to 2.3.0 above -- kept as written, per this repo's retract-in-place
 # rule] 2.2.0 exists (705b79c) and is NOT what this should become: it adds pre-release support for
 # `index_channel: none`, and for any other channel 2.1.0 remains the version. What was
@@ -143,7 +167,7 @@ on:
 
 jobs:
   release:
-    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@5787de78bab935e422e75f6eabc47fa7cc073045 # 2.3.0
+    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@ce0789323d6a51a9928d574b420a0e57385c1498 # 2.3.2
     # REQUIRED, AND ITS ABSENCE IS A STARTUP FAILURE, NOT A PUSH FAILURE.
     #
     # A called workflow's permissions are CAPPED AT ITS CALLER'S -- which the header of
