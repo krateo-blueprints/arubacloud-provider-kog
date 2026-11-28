@@ -57,15 +57,22 @@
 # STANDING INSTRUCTION FOR A DEPENDABOT PR ON THIS PIN: CHECK THE ANCESTRY BEFORE CLOSING OR
 # TAKING IT. Neither a blanket close nor a blanket merge is right any more. Run
 #   gh api repos/krateo-platformops/.github/compare/<this pin's SHA>...<offered tag's SHA>
-# and read `status` and `behind_by`. `ahead` with `behind_by=0` means the tag is a
-# descendant and the bump is a real upgrade; `behind` or `diverged` means it moves the pin
-# backwards or sideways and the PR must be closed. Since 2.3.0 the newest tag is a
-# descendant of this pin, so for the first time the PR offering the newest tag is correct.
+# and read `status`, NOT `behind_by` alone -- and note the base is THIS PIN, written first.
+# Reversed, the dangerous bump prints the reassuring number: with pin aa90d48 and the 2.0.0
+# ancestor below, `compare/aa90d48...2.0.0` gives `status=behind behind_by=6` (refuse) while
+# `compare/2.0.0...aa90d48` gives `status=ahead behind_by=0` (looks safe). Same two commits,
+# opposite conclusion, and the natural argument order is the wrong one. So:
+#   status=ahead     + behind_by=0  -> a true descendant, a real upgrade, take it
+#   status=identical                -> a relabel of the same commit, a no-op, not an upgrade
+#   status=behind | diverged        -> it moves the pin backwards or sideways, CLOSE the PR
+# Since 2.3.0 the newest tag is a descendant of this pin, so for the first time the PR
+# offering the newest tag is correct.
 # The comment must still match the pinned-uses regex `^(\d+\.\d+\.\d+|main \d{4}-\d{2}-\d{2})$`.
 #
 # [HISTORY, NOT A CURRENT RULE -- true of 2.0.0 and of the pin at aa90d48, withdrawn as a
 # standing instruction by the paragraph above] DO NOT BUMP THIS PIN UNTIL `2.1.0` EXISTS ON
-# aa90d48 -- AND THE DANGEROUS BUMP LOOKS LIKE AN UPGRADE. Dependabot does not offer newer COMMITS of a SHA pin; it offers newer release
+# aa90d48 -- AND THE DANGEROUS BUMP LOOKS LIKE AN UPGRADE. Dependabot does not offer newer
+# COMMITS of a SHA pin; it offers newer release
 # TAGS. Measured 2026-11-23: upstream has 5 tags, the newest being `2.0.0`, and it points at
 # `7da11cb60cee`, which `compare` reports as `status=ahead ahead_by=6 behind_by=0` relative
 # to this pin -- i.e. 2.0.0 is an ANCESTOR of aa90d48.
