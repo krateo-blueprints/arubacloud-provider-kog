@@ -124,6 +124,8 @@ the first thing to check
 RESTAction's jq against the contract in
 [lifecycle-beyond-crud](lifecycle-beyond-crud.md#runtime-contracts-verified-against-rdc-source).
 
+Checking the jq is necessary but not sufficient, and a `200` does not prove the delegation worked: do not trust it here, and assert on the resource itself (does it exist, does it have the expected state). A write stage whose path jq fails is skipped with no stage outcome and the call still answers `200`, so a failing jq is indistinguishable from success at the HTTP layer. This is [snowplow#1001](https://github.com/krateo-platformops/snowplow/issues/1001), **open** as of 2026-11-28; on 2026-11-03 it was widened from writes to cover reads as well.
+
 ## Async polling never completes (or the RestDefinition is rejected)
 
 - **Rejected at admission** with a poll-path message: oasgen >= 0.18.0 validates
