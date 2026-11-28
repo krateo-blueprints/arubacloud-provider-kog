@@ -49,7 +49,7 @@ class Control(unittest.TestCase):
             elif cur:
                 blocks[cur].append(ln)
         txt = {k: "\n".join(v) for k, v in blocks.items()}
-        self.assertEqual(len(txt), 4, "all four fixture children must be reported")
+        self.assertEqual(len(txt), 5, "all four fixture children must be reported")
         # the two the lead asked for
         self.assertIn("PROPAGATED (", txt["vpc-prop"])
         self.assertNotIn("NOT PROPAGATED", txt["vpc-prop"])
@@ -58,11 +58,52 @@ class Control(unittest.TestCase):
         for k, v in txt.items():
             self.assertRegex(v, r"D=<?[\d.]+s\s+P=[\d.]+s", k)
             self.assertRegex(v, r"relation: D (<|>=) P", k)
+        # parent already Ready=False/Creating, status never changes: only the message
+        # moves "1 of 2" -> "2 of 2" and gains the child's name. lastTransitionTime is
+        # outside the window, so a timestamp-only detector would say NOT PROPAGATED.
+        self.assertIn("PROPAGATED (attributable", txt["db-reasononly"])
+        self.assertNotIn("NOT PROPAGATED", txt["db-reasononly"])
+        self.assertIn("'1 of 2 managed children are not ready: net-other'",
+                      txt["db-reasononly"])
+        self.assertIn("'2 of 2 managed children are not ready: net-other, db-reasononly'",
+                      txt["db-reasononly"])
         # the distinction that is the deliverable
         self.assertIn("NOT SAMPLED", txt["subnet-notsampled"])
         self.assertNotIn("NOT PROPAGATED", txt["subnet-notsampled"])
         self.assertIn("NOT PROPAGATED", txt["sg-notprop"])
         self.assertNotIn("NOT SAMPLED", txt["sg-notprop"])
+
+
+class ParentAlreadyDown(unittest.TestCase):
+    def verdict(self, mutate):
+        r = base()
+        mutate(r)
+        p = run(with_record(r))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        lines = p.stdout.splitlines()
+        i = [n for n, l in enumerate(lines) if l.startswith("  child") and
+             l.split()[1].endswith("db-reasononly:")][0]
+        return "\n".join(lines[i:i + 4])
+
+    def test_no_attributable_change_is_not_assessable(self):
+        def flat(r):  # message never changes: nothing attributable, status never moves
+            for smp in r["samples"]:
+                rd = smp["compositions"][0]["parent"]["ready"]
+                if rd["status"] == "False" and "db-reasononly" in rd["message"]:
+                    rd["message"] = "1 of 2 managed children are not ready: net-other"
+        v = self.verdict(flat)
+        self.assertIn("NOT ASSESSABLE", v)
+        self.assertNotIn("NOT PROPAGATED", v)
+
+    def test_unattributable_message_churn_is_not_evidence(self):
+        def churn(r):  # message changes but never names the child (core-provider#298)
+            for smp in r["samples"]:
+                rd = smp["compositions"][0]["parent"]["ready"]
+                if rd["status"] == "False" and "db-reasononly" in rd["message"]:
+                    rd["message"] = "2 of 2 managed children are not ready: net-other"
+        v = self.verdict(churn)
+        self.assertIn("NOT ASSESSABLE", v)
+        self.assertIn("does not name", v)
 
 
 class EmptyInputMustFail(unittest.TestCase):
@@ -137,8 +178,9 @@ class ManagedState(unittest.TestCase):
                 c["managed_recorded_but_absent"] = [k]
         p = run(with_record(r))
         self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("D=-", p.stdout, "a flap duration must never be negative")
         self.assertRegex(p.stdout, r"MISMATCH: recorded in status.managed but NotFound "
-                                   r"live in 4 of 34 sample\(s\): .*lb-syncedonly")
+                                   r"live in 4 of 51 sample\(s\): .*lb-syncedonly")
 
     def test_sampler_mirrors_rollup_rules(self):
         sys.path.insert(0, os.path.join(HERE, "..", "..", "scripts"))
