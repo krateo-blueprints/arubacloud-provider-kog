@@ -106,7 +106,7 @@ on:
 
 jobs:
   release:
-    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@aa90d48e1a101d5e9b3e547bca116b97c49513b5 # 2.1.0
+    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@5787de78bab935e422e75f6eabc47fa7cc073045 # main 2026-11-28
     # REQUIRED, AND ITS ABSENCE IS A STARTUP FAILURE, NOT A PUSH FAILURE.
     #
     # A called workflow's permissions are CAPPED AT ITS CALLER'S -- which the header of
